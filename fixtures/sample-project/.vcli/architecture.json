@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "components": [
+    { "id": "api", "label": "HTTP API", "paths": ["apps/api/"], "dependencies": ["application"] },
+    {
+      "id": "application",
+      "label": "Task application",
+      "paths": ["packages/application/"],
+      "dependencies": ["domain", "storage"]
+    },
+    {
+      "id": "storage",
+      "label": "Task storage",
+      "paths": ["packages/storage/"],
+      "dependencies": ["domain"]
+    },
+    { "id": "domain", "label": "Task domain", "paths": ["packages/domain/"], "dependencies": [] }
+  ],
+  "decisions": ["Domain types have no storage or HTTP dependencies."]
+}

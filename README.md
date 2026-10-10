@@ -1,1 +1,194 @@
 # vcli
+
+An architecture-first coding agent. Explore the source graph, declare component
+boundaries, and watch a design become code in a terminal workspace.
+
+TypeScript · Bun · OpenTUI/Solid · SQLite · ELK · resvg
+
+![Exported sample source architecture](docs/example-architecture.png)
+
+## Start
+
+Install **Bun 1.3.13** and **ripgrep**, then:
+
+```sh
+bun install --frozen-lockfile
+bun run dev --root fixtures/sample-project
+```
+
+The canvas uses real Kitty or Sixel images when detected. Unsupported terminals
+show a navigable tree. Scanning, navigation and export use no model tokens.
+
+Choose a provider and a model you have access to:
+
+```sh
+bun run dev config set provider openai
+bun run dev config set model YOUR_MODEL_ID
+export OPENAI_API_KEY="YOUR_KEY"
+bun run dev
+```
+
+| Provider                           | Setting      | Credential                              |
+| ---------------------------------- | ------------ | --------------------------------------- |
+| OpenAI Responses                   | `openai`     | `OPENAI_API_KEY`                        |
+| Anthropic Messages                 | `anthropic`  | `ANTHROPIC_API_KEY`                     |
+| Gemini                             | `gemini`     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`    |
+| OpenAI-compatible Chat Completions | `compatible` | `VCLI_COMPATIBLE_API_KEY` when required |
+
+For a compatible server, also set `baseURL` to its API base URL. Model identifiers
+are selected explicitly; vcli does not assume a subscription login or a default
+paid model. The conservative default context window is 32,768 tokens. Set
+`contextWindow` to your model's documented limit; the output reserve is subtracted
+from it before preparing context.
+
+**YOLO is the default:** the agent uses your filesystem and network privileges
+without approval prompts. Change `permission` to `ask` or `read-only`, or pass
+`--permission` for one run. Ask mode denies execution when no interactive approval
+channel is available. Permission controls are not a filesystem sandbox.
+
+## Architecture workspace
+
+The canvas gets most of the screen. Wide terminals include a module tree and a
+source inspector; narrow terminals offer switchable canvas, tree and inspector panels.
+
+| Key                      | Action                                    |
+| ------------------------ | ----------------------------------------- |
+| Tab                      | Switch focus between prompt and canvas    |
+| Arrows / mouse click     | Select a module                           |
+| Shift + arrows           | Pan                                       |
+| `+` / `-`                | Zoom                                      |
+| Enter                    | Drill into a module or group              |
+| Space                    | Collapse a parent                         |
+| `v`                      | Observed → intended → changes             |
+| `/`                      | Search modules                            |
+| `t`                      | Toggle the side tree; cycle narrow panels |
+| Escape                   | Reset search, drill and viewport          |
+| `r`                      | Refresh from source                       |
+| Ctrl+C                   | Stop the current task; exit when idle     |
+| `q` while canvas focused | Exit                                      |
+
+Prompt commands: `/observed`, `/intended`, `/changes`, `/scan`.
+The intended design appears as soon as `architecture_propose` completes, before
+the next mutation starts. Source changes trigger reconciliation; idle refreshes
+also detect external edits. Changes are compared with the graph at workspace open.
+
+```sh
+vcli architecture scan --root ./project --json
+vcli architecture view --root ./project --renderer kitty
+vcli architecture export --root ./project --format png --output architecture.png
+vcli architecture export --root ./project --format svg
+vcli architecture export --root ./project --format json
+vcli architecture check --root ./project
+```
+
+Renderer overrides: `auto`, `kitty`, `sixel`, `blocks`, `off`. Auto chooses the tree
+inside multiplexers unless graphics are explicitly requested. See the
+[terminal validation record](docs/validation.md) for tested behavior and remaining
+real-terminal checks.
+
+Intended components and dependency rules live in `.vcli/architecture.json`.
+Commit that document. Derived indexes, SQLite sessions and complete tool outputs
+live in `.vcli/state/` and `.vcli/artifacts/`; add both paths to your project's
+`.gitignore`. The [sample project](fixtures/sample-project/.vcli/architecture.json)
+and [vcli's own design](.vcli/architecture.json) show the version 1 format.
+Omitted `dependencies` allow any component dependency; an explicit array is an
+allowlist. `forbiddenDependencies` takes precedence. Drift checks include source
+evidence and exit with status 1 on violations.
+
+## Tasks, sessions and token budgets
+
+```sh
+vcli run "Extract persistence into a storage component and verify the tests"
+vcli run "Inspect the module boundaries" --permission read-only --json
+vcli sessions list
+vcli sessions resume SESSION_ID "Continue and verify the result"
+```
+
+`--json` emits newline-delimited runtime events without terminal escape sequences.
+Interrupted mutation outcomes remain in the ledger and are inspected on resume;
+vcli never automatically replays them. Changing providers discards provider-specific
+continuation data and retains portable messages and task state.
+
+Balanced defaults are configurable:
+
+| Setting                |                            Default |
+| ---------------------- | ---------------------------------: |
+| `context.promptTokens` |                      32,000 target |
+| `context.mapTokens`    |                              4,000 |
+| `context.schemaTokens` |                              4,000 |
+| `context.resultTokens` |                              3,000 |
+| `context.outputTokens` |                     8,000 reserved |
+| `context.maxTurns`     |                                 40 |
+| `context.taskTokens`   | Unset; explicit total task ceiling |
+
+```sh
+vcli config set context.taskTokens 100000
+vcli config set permission ask --project
+vcli config show
+```
+
+Precedence: CLI options → project `.vcli/config.json` → user
+`~/.config/vcli/config.json` → defaults. `VCLI_CONFIG_HOME` changes the user directory.
+Credentials stay in environment variables. Context-size estimates use UTF-8 bytes
+divided by three; provider-reported input, output and cached usage are recorded
+separately. Unchanged overlapping reads are omitted, full outputs remain retrievable,
+and old complete tool groups are pruned while the durable ledger is retained.
+There is no paid summarization step in this release. Unknown extension schemas
+and skill bodies are loaded only after discovery.
+
+Task budgets reserve the estimated input and response allowance before each model
+call. Reported usage reconciles that reservation; missing usage or an interrupted
+request retains it across resume, so an absent usage report cannot bypass the limit.
+
+The [reproducible offline benchmark](docs/benchmarks.md) compares identical evidence
+tasks with full-source/full-schema prompts. It measures prepared context and local
+latency; live model completion rate and provider billing savings are not established.
+
+## Skills, MCP and marketplaces
+
+Project skills are discovered in `.vcli/skills`, `.agents/skills`, `.claude/skills`
+and `.gemini/skills`. Portable Agent Plugins, Claude catalogs/packages, Codex
+catalogs/packages and Gemini extensions are normalized to supported skills and
+MCP servers. Vendor hooks, commands, agents and host UI features are reported as
+unsupported. Credentials and connected app accounts require separate integrations.
+
+```sh
+vcli plugins install ./my-plugin
+vcli plugins install https://github.com/team/plugins.git --ref COMMIT_SHA --subdir plugins/design
+vcli plugins list
+vcli plugins marketplace add team https://github.com/team/catalog.git --ref COMMIT_SHA
+vcli plugins marketplace list
+vcli plugins install design --marketplace team
+vcli plugins marketplace refresh team
+vcli plugins remove design
+```
+
+Installs copy snapshots and record provenance. Hooks never run during installation.
+MCP stdio programs and HTTP connections start on discovery through the permission
+gate. Their schemas are deferred, arguments validated, and cancelled or uncertain
+calls are never retried. Supported transports are stdio and Streamable HTTP.
+Configuration, import compatibility and storage limitations are documented in
+[integrations](packages/integrations/README.md).
+
+## Development and packaging
+
+```sh
+bun run format:check
+bun run check
+bun test
+bun run benchmark
+bun run build
+bun run smoke
+./dist/vcli --help
+```
+
+Builds produce a host-native executable with the layout worker, font and native
+libraries embedded. Distribute `dist/licenses`, the font license and
+`THIRD_PARTY_NOTICES.md` beside it. Builds are tested on the host platform;
+macOS/Linux CI is configured. Native Windows, browser parity, additional deep
+language analysis, subscription login and autonomous agent teams are deferred.
+
+The [architecture guide](docs/architecture.md) describes the contracts and package
+boundaries. [Research notes](docs/research.md) record the independent design sources.
+Formatting is automated, commands and tools have focused modules, and the core
+imports neither terminal libraries, provider SDKs nor Bun APIs.

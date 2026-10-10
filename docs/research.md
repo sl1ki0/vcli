@@ -2,15 +2,15 @@
 
 Research completed before implementation on 2026-10-10. This is an independent implementation.
 
-| Source | Adopted boundary |
-| --- | --- |
+| Source                                                                        | Adopted boundary                                                       |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | [Pi](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md) | Typed tool/model events, application state separate from model context |
-| [OpenCode](https://opencode.ai/docs/server/) | Headless runtime with independent clients |
-| [Claude Code](https://code.claude.com/docs/en/how-claude-code-works) | Gather, act, verify loop and deferred discovery |
-| [Aider](https://aider.chat/docs/repomap.html) | Budgeted graph-ranked repository maps |
-| [OpenTUI](https://opentui.com/docs/components/image/) | Managed Kitty/Sixel graphics, readable tree fallback |
-| [Agent Plugins](https://agent-plugins.org/specification) | Portable skills/MCP with vendor adapters |
-| [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching) | Stable prefixes and actual cached-token accounting |
+| [OpenCode](https://opencode.ai/docs/server/)                                  | Headless runtime with independent clients                              |
+| [Claude Code](https://code.claude.com/docs/en/how-claude-code-works)          | Gather, act, verify loop and deferred discovery                        |
+| [Aider](https://aider.chat/docs/repomap.html)                                 | Budgeted graph-ranked repository maps                                  |
+| [OpenTUI](https://opentui.com/docs/components/image/)                         | Managed Kitty/Sixel graphics, readable tree fallback                   |
+| [Agent Plugins](https://agent-plugins.org/specification)                      | Portable skills/MCP with vendor adapters                               |
+| [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching)        | Stable prefixes and actual cached-token accounting                     |
 
 The user-supplied Claude mirror calls itself leaked source and has no identified reuse grant. No code is copied from it. Public behavior documentation informs the independently authored loop.
 

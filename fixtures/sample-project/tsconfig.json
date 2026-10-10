@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@sample/domain": ["packages/domain/src/index.ts"],
+      "@sample/storage": ["packages/storage/src/index.ts"],
+      "@sample/application": ["packages/application/src/index.ts"]
+    }
+  }
+}
