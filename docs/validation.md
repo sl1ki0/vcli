@@ -7,6 +7,10 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 The final local suite passes 96 tests with 428 assertions. Formatting, strict
 type checking and the declared package dependency check also pass.
 
+The [macOS and Linux CI run](https://github.com/sl1ki0/vcli/actions/runs/38065175676)
+passed the same checks, including native builds, standalone pseudoterminal smoke,
+the benchmark and release artifact upload.
+
 ## Automated coverage
 
 - A real SDK connected to a local streaming HTTP fixture completes architecture
@@ -41,15 +45,15 @@ remain unmeasured.
 
 ## Real-terminal matrix
 
-| Environment                      | Current verification                                                      |
-| -------------------------------- | ------------------------------------------------------------------------- |
-| Kitty                            | Transport and packaged pseudoterminal verified; real application pending  |
-| Ghostty                          | Native inspection blocked by the computer-use tool; real smoke pending    |
-| iTerm2                           | Not available in this environment; real Sixel smoke pending               |
-| WezTerm with configured graphics | Not available; real smoke pending                                         |
-| SSH                              | Detection/fallback logic covered; remote-terminal smoke pending           |
-| tmux                             | Auto falls back; explicit graphics passthrough smoke pending              |
-| Linux / WSL                      | Native Windows is deferred; Linux CI configured, manual WSL smoke pending |
+| Environment                      | Current verification                                                     |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Kitty                            | Transport and packaged pseudoterminal verified; real application pending |
+| Ghostty                          | Native inspection blocked by the computer-use tool; real smoke pending   |
+| iTerm2                           | Not available in this environment; real Sixel smoke pending              |
+| WezTerm with configured graphics | Not available; real smoke pending                                        |
+| SSH                              | Detection/fallback logic covered; remote-terminal smoke pending          |
+| tmux                             | Auto falls back; explicit graphics passthrough smoke pending             |
+| Linux / WSL                      | Linux build and standalone smoke passed in CI; manual WSL smoke pending  |
 
 Manual smoke procedure: launch `vcli --root fixtures/sample-project`, confirm graph
 labels and routed edges, click and keyboard-select modules, resize, pan, zoom,
