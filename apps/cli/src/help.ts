@@ -1,0 +1,18 @@
+export const HELP = `vcli — architecture-first AI coding
+
+vcli                                  Open the visual workspace
+vcli run <task> [--json]                Run the coding agent
+vcli architecture scan|view|check      Inspect structure or declared drift
+vcli architecture export --format svg|png|json --output <file>
+vcli sessions list|resume <id> [task]   Inspect or resume durable sessions
+vcli config show|set <key> <value>      Configure provider/model/permissions/budgets
+vcli plugins list|install <source>|remove <name>
+vcli plugins marketplace add <name> <source>|list|refresh <name>|remove <name>
+vcli plugins install <plugin> --marketplace <name>
+
+Options: --root <path> --provider <openai|anthropic|gemini|compatible>
+         --model <id> --endpoint <url> --permission <yolo|ask|read-only>
+         --renderer <auto|kitty|sixel|blocks|off> --project --ref <git-ref> --subdir <path>
+API keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, VCLI_COMPATIBLE_API_KEY.
+YOLO is the default. Graph exploration and export require no API key.
+`;
