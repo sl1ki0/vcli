@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ArchitectureDesign, ArchitectureGraph } from "@vcli/core";
@@ -156,6 +156,39 @@ describe("source architecture", () => {
       await readFile(join(root, ".vcli/state/architecture-index.json"), "utf8"),
     );
     expect(cache.files["src/helper.ts"]).toBeUndefined();
+  });
+
+  test("reconciles an external rename on resume without stale imports or cache entries", async () => {
+    const root = await project(sourceFiles);
+    const initial = await createArchitectureService().scan(root);
+    await rename(join(root, "src/helper.ts"), join(root, "src/renamed.ts"));
+    await writeFile(
+      join(root, "src/main.ts"),
+      sourceFiles["src/main.ts"]
+        .replace('"@app/helper"', '"@app/renamed"')
+        .replace('"./helper.js"', '"./renamed.js"'),
+    );
+
+    const resumed = await createArchitectureService().scan(root);
+    expect(resumed.diagnostics).toEqual([]);
+    expect(resumed.revision).not.toBe(initial.revision);
+    expect(resumed.nodes.some((node) => node.id === "module:src/helper.ts")).toBe(false);
+    expect(resumed.nodes.some((node) => node.id === "module:src/renamed.ts")).toBe(true);
+    expect(
+      resumed.edges.filter(
+        (edge) => edge.source === "module:src/main.ts" && edge.target === "module:src/renamed.ts",
+      ),
+    ).toHaveLength(2);
+    expect(resumed.nodes.find((node) => node.path === "src/a.ts")?.id).toBe(
+      initial.nodes.find((node) => node.path === "src/a.ts")?.id,
+    );
+    expect(resumed.stats.parsed).toBe(2);
+    expect(resumed.stats.cached).toBe(3);
+    const cache = JSON.parse(
+      await readFile(join(root, ".vcli/state/architecture-index.json"), "utf8"),
+    );
+    expect(cache.files["src/helper.ts"]).toBeUndefined();
+    expect(cache.files["src/renamed.ts"]).toBeDefined();
   });
 
   test("honors ignored paths, represents other-language files and resolves real assets", async () => {
