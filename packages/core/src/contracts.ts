@@ -29,11 +29,13 @@ export interface ArchitectureNode {
   id: string; label: string; kind: "component" | "package" | "module" | "file" | "external";
   path?: string; parent?: string; signatures?: string[]; evidence?: Evidence[];
   status?: "observed" | "planned" | "unresolved" | "inferred";
+  change?: "added" | "removed" | "modified";
 }
 export interface ArchitectureEdge {
   id: string; source: string; target: string;
   kind: "import" | "type-import" | "reexport" | "contains" | "uses";
   evidence?: Evidence[]; status?: "observed" | "planned" | "unresolved" | "inferred";
+  change?: "added" | "removed" | "modified";
 }
 export interface ArchitectureGraph {
   revision: string; root: string; nodes: ArchitectureNode[]; edges: ArchitectureEdge[];
