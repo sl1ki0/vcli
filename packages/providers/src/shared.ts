@@ -9,7 +9,10 @@ export interface ProviderConfig {
 }
 
 export type WireObject = Record<string, unknown>;
-export type ProviderTransport = (request: WireObject, signal: AbortSignal) => Promise<AsyncIterable<WireObject>>;
+export type ProviderTransport = (
+  request: WireObject,
+  signal: AbortSignal,
+) => Promise<AsyncIterable<WireObject>>;
 export interface ProviderDependencies {
   /** Replaces only the SDK/network boundary; request mapping and normalization still run. */
   transport?: ProviderTransport;
@@ -17,27 +20,45 @@ export interface ProviderDependencies {
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
     super(message);
     this.name = "ProviderError";
   }
 }
 
 export function object(value: unknown): WireObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as WireObject : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as WireObject)
+    : {};
 }
 export function objects(value: unknown): WireObject[] {
   return Array.isArray(value) ? value.map(object) : [];
 }
-export function string(value: unknown): string { return typeof value === "string" ? value : ""; }
-export function count(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0; }
+export function string(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+export function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
 export function toolCall(id: unknown, name: unknown, argumentsValue: unknown): ToolCall {
   let args: unknown = argumentsValue;
   if (typeof args === "string") {
-    try { args = JSON.parse(args || "{}"); }
-    catch { throw new ProviderError("The model returned invalid tool arguments. No tool was executed."); }
+    try {
+      args = JSON.parse(args || "{}");
+    } catch {
+      throw new ProviderError("The model returned invalid tool arguments. No tool was executed.");
+    }
   }
-  if (!string(id) || !string(name) || args === null || typeof args !== "object" || Array.isArray(args)) {
+  if (
+    !string(id) ||
+    !string(name) ||
+    args === null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
     throw new ProviderError("The model returned an invalid tool call. No tool was executed.");
   }
   return { id: string(id), name: string(name), arguments: args as Record<string, unknown> };
@@ -55,9 +76,16 @@ export function abort(signal: AbortSignal): void {
 export async function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   abort(signal);
   await new Promise<void>((resolve, reject) => {
-    const finish = () => { signal.removeEventListener("abort", cancel); resolve(); };
+    const finish = () => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
+    };
     const timer = setTimeout(finish, milliseconds);
-    const cancel = () => { clearTimeout(timer); signal.removeEventListener("abort", cancel); reject(new DOMException("Model request cancelled", "AbortError")); };
+    const cancel = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      reject(new DOMException("Model request cancelled", "AbortError"));
+    };
     signal.addEventListener("abort", cancel, { once: true });
   });
 }
@@ -66,7 +94,11 @@ function retryable(error: unknown): boolean {
   if (error instanceof ProviderError) return false;
   const e = object(error);
   const status = count(e.status ?? e.statusCode ?? e.code);
-  return [408, 409, 429].includes(status) || status >= 500 || ["APIConnectionError", "APIConnectionTimeoutError"].includes(string(e.name));
+  return (
+    [408, 409, 429].includes(status) ||
+    status >= 500 ||
+    ["APIConnectionError", "APIConnectionTimeoutError"].includes(string(e.name))
+  );
 }
 
 /** Retry model requests only before the first delivered event, never a partial answer or tools. */
@@ -78,7 +110,10 @@ export function adapter(
   sdkTransport: () => ProviderTransport,
 ): ProviderAdapter {
   if (!config.model.trim()) throw new ProviderError("A model name is required.");
-  if (config.contextWindow !== undefined && (!Number.isInteger(config.contextWindow) || config.contextWindow < 1024)) {
+  if (
+    config.contextWindow !== undefined &&
+    (!Number.isInteger(config.contextWindow) || config.contextWindow < 1024)
+  ) {
     throw new ProviderError("contextWindow must be an integer of at least 1024 tokens.");
   }
   const transport = dependencies.transport ?? sdkTransport();
@@ -108,9 +143,14 @@ export function adapter(
             continue;
           }
           if (error instanceof ProviderError) throw error;
-          const status = count(object(error).status ?? object(error).statusCode ?? object(error).code) || undefined;
+          const status =
+            count(object(error).status ?? object(error).statusCode ?? object(error).code) ||
+            undefined;
           // SDK messages and causes can contain URLs, request bodies, and credentials.
-          throw new ProviderError(`${config.provider} model request failed${status ? ` (HTTP ${status})` : ""}. Check the provider settings and connection.`, status);
+          throw new ProviderError(
+            `${config.provider} model request failed${status ? ` (HTTP ${status})` : ""}. Check the provider settings and connection.`,
+            status,
+          );
         }
       }
     },
@@ -118,12 +158,19 @@ export function adapter(
 }
 
 export function apiKey(config: ProviderConfig): string {
-  const variables = config.provider === "gemini" ? ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
-    : config.provider === "anthropic" ? ["ANTHROPIC_API_KEY"]
-    : config.provider === "compatible" ? ["VCLI_COMPATIBLE_API_KEY"] : ["OPENAI_API_KEY"];
-  const key = config.apiKey || variables.map(name => process.env[name]).find(Boolean);
+  const variables =
+    config.provider === "gemini"
+      ? ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+      : config.provider === "anthropic"
+        ? ["ANTHROPIC_API_KEY"]
+        : config.provider === "compatible"
+          ? ["VCLI_COMPATIBLE_API_KEY"]
+          : ["OPENAI_API_KEY"];
+  const key = config.apiKey || variables.map((name) => process.env[name]).find(Boolean);
   if (key) return key;
   // Local/OpenAI-compatible services frequently run without authentication.
   if (config.provider === "compatible" && config.baseURL) return "vcli-local";
-  throw new ProviderError(`No ${config.provider} API key configured. Set ${variables[0]} or supply apiKey in the provider configuration.`);
+  throw new ProviderError(
+    `No ${config.provider} API key configured. Set ${variables[0]} or supply apiKey in the provider configuration.`,
+  );
 }
