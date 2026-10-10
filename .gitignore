@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vcli/state/
+.vcli/artifacts/
+*.log
+.env
+.env.*
+!.env.example

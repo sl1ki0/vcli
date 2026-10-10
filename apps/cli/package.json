@@ -1,0 +1,1 @@
+{"name":"vcli","version":"0.1.0","type":"module","bin":{"vcli":"./src/index.ts"},"dependencies":{"@vcli/core":"workspace:*","@vcli/architecture":"workspace:*","@vcli/providers":"workspace:*","@vcli/integrations":"workspace:*","@vcli/tui":"workspace:*"}}
