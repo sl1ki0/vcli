@@ -223,79 +223,88 @@ export class McpManager {
     return abortable(promise, signal);
   }
 
+  private toolDefinition(server: string, tool: Tool): ToolDefinition {
+    return {
+      name: toolName(server, tool.name),
+      description: `${server}: ${tool.description ?? tool.name}`,
+      inputSchema: tool.inputSchema,
+      kind: "execute",
+      eager: false,
+      execute: async (args, context) => {
+        const connection = await this.connection(server, context.signal);
+        try {
+          return mcpResult(
+            await abortable(connection.callTool(tool, args, context.signal), context.signal),
+            this.options.resultChars,
+          );
+        } catch (error) {
+          await this.disconnect(server);
+          throw new Error(
+            `MCP ${server}/${tool.name} failed: ${message(error)}. The call was not replayed; inspect external state before retrying.`,
+          );
+        }
+      },
+    };
+  }
+
+  private resourceDefinitions(server: string): ToolDefinition[] {
+    return [
+      {
+        name: toolName(server, "@resources.list"),
+        description: `List resources available from MCP server ${server}`,
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        kind: "read",
+        eager: false,
+        execute: async (_, context) => {
+          const resources = await this.listResources(server, context.signal);
+          const fullOutput = JSON.stringify(resources);
+          return { text: bounded(fullOutput, this.options.resultChars ?? 8000), fullOutput };
+        },
+      },
+      {
+        name: toolName(server, "@resources.read"),
+        description: `Read a resource URI from MCP server ${server}`,
+        inputSchema: {
+          type: "object",
+          properties: { uri: { type: "string", minLength: 1 } },
+          required: ["uri"],
+          additionalProperties: false,
+        },
+        kind: "read",
+        eager: false,
+        execute: (args, context) => this.readResource(server, String(args.uri), context.signal),
+      },
+    ];
+  }
+
+  private async discoverServer(server: string, signal?: AbortSignal): Promise<ToolDefinition[]> {
+    const connection = await this.connection(server, signal, true);
+    const tools = await connection.listTools(signal);
+    const seen = new Set<string>();
+    const definitions: ToolDefinition[] = [];
+    for (const tool of tools) {
+      if (
+        !/^[A-Za-z0-9_.-]{1,128}$/.test(tool.name) ||
+        seen.has(tool.name) ||
+        !tool.inputSchema ||
+        typeof tool.inputSchema !== "object" ||
+        Array.isArray(tool.inputSchema)
+      ) {
+        this.report(`MCP ${server}: skipped invalid/duplicate tool ${tool.name}`);
+        continue;
+      }
+      seen.add(tool.name);
+      definitions.push(this.toolDefinition(server, tool));
+    }
+    return [...definitions, ...this.resourceDefinitions(server)];
+  }
+
   async discover(serverName?: string, signal?: AbortSignal): Promise<ToolDefinition[]> {
     if (serverName && !this.servers.has(serverName))
       throw new Error(`Unknown MCP server: ${serverName}`);
     const names = serverName ? [serverName] : [...this.servers.keys()];
     const results = await Promise.allSettled(
-      names.map(async (name) => {
-        const connection = await this.connection(name, signal, true);
-        const tools = await connection.listTools(signal);
-        const seen = new Set<string>();
-        const definitions: ToolDefinition[] = [];
-        for (const tool of tools) {
-          if (
-            !/^[A-Za-z0-9_.-]{1,128}$/.test(tool.name) ||
-            seen.has(tool.name) ||
-            !tool.inputSchema ||
-            typeof tool.inputSchema !== "object" ||
-            Array.isArray(tool.inputSchema)
-          ) {
-            this.report(`MCP ${name}: skipped invalid/duplicate tool ${tool.name}`);
-            continue;
-          }
-          seen.add(tool.name);
-          definitions.push({
-            name: toolName(name, tool.name),
-            description: `${name}: ${tool.description ?? tool.name}`,
-            inputSchema: tool.inputSchema,
-            kind: "execute",
-            eager: false,
-            execute: async (args, context) => {
-              const active = await this.connection(name, context.signal);
-              try {
-                return mcpResult(
-                  await abortable(active.callTool(tool, args, context.signal), context.signal),
-                  this.options.resultChars,
-                );
-              } catch (error) {
-                await this.disconnect(name);
-                throw new Error(
-                  `MCP ${name}/${tool.name} failed: ${message(error)}. The call was not replayed; inspect external state before retrying.`,
-                );
-              }
-            },
-          });
-        }
-        definitions.push(
-          {
-            name: toolName(name, "@resources.list"),
-            description: `List resources available from MCP server ${name}`,
-            inputSchema: { type: "object", properties: {}, additionalProperties: false },
-            kind: "read",
-            eager: false,
-            execute: async (_, context) => {
-              const resources = await this.listResources(name, context.signal);
-              const fullOutput = JSON.stringify(resources);
-              return { text: bounded(fullOutput, this.options.resultChars ?? 8000), fullOutput };
-            },
-          },
-          {
-            name: toolName(name, "@resources.read"),
-            description: `Read a resource URI from MCP server ${name}`,
-            inputSchema: {
-              type: "object",
-              properties: { uri: { type: "string", minLength: 1 } },
-              required: ["uri"],
-              additionalProperties: false,
-            },
-            kind: "read",
-            eager: false,
-            execute: (args, context) => this.readResource(name, String(args.uri), context.signal),
-          },
-        );
-        return definitions;
-      }),
+      names.map((name) => this.discoverServer(name, signal)),
     );
     const output: ToolDefinition[] = [];
     results.forEach((result, index) => {

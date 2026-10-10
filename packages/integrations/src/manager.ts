@@ -122,6 +122,58 @@ async function acquire(
   }
 }
 
+async function readCatalogEntry(
+  root: string,
+  name: string,
+  entry: Record<string, unknown>,
+): Promise<MarketplaceEntry> {
+  let source: string;
+  let local = false;
+  let revision = typeof entry.revision === "string" ? entry.revision : undefined;
+  let subdir = typeof entry.subdir === "string" ? relativeSubdir(entry.subdir) : undefined;
+  if (typeof entry.source === "string") {
+    source = entry.source;
+    local = !gitSource(source);
+  } else {
+    const origin = object(entry.source, `Source for ${name}`);
+    const kind = origin.source ?? origin.type;
+    if (typeof origin.path === "string" && (!kind || kind === "directory" || kind === "local")) {
+      source = origin.path;
+      local = true;
+    } else if (
+      kind === "github" &&
+      typeof origin.repo === "string" &&
+      /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(origin.repo)
+    ) {
+      source = `https://github.com/${origin.repo}.git`;
+    } else if ((kind === "git" || kind === "repository") && typeof origin.url === "string")
+      source = origin.url;
+    else throw new Error(`Marketplace plugin ${name}: unsupported source format`);
+    revision =
+      typeof origin.sha === "string"
+        ? origin.sha
+        : typeof origin.ref === "string"
+          ? origin.ref
+          : revision;
+    subdir = typeof origin.path === "string" && !local ? relativeSubdir(origin.path) : subdir;
+  }
+  if (local) {
+    if (!source.startsWith("./"))
+      throw new Error(`Marketplace plugin ${name}: local source must start with ./`);
+    await containedPath(root, source);
+    if (subdir) await containedPath(root, join(source, subdir));
+  } else if (!gitSource(source))
+    throw new Error(`Marketplace plugin ${name}: unsupported repository URL`);
+  return {
+    name,
+    description: typeof entry.description === "string" ? entry.description : undefined,
+    source,
+    local,
+    revision,
+    subdir,
+  };
+}
+
 async function catalog(
   root: string,
 ): Promise<{ plugins: MarketplaceEntry[]; unsupported: string[] }> {
@@ -146,55 +198,9 @@ async function catalog(
       const entry = object(value, "Marketplace entry");
       const name = validateName(entry.name, "Marketplace plugin name");
       if (names.has(name)) throw new Error(`Duplicate marketplace plugin: ${name}`);
-      let source: string;
-      let local = false;
-      let revision = typeof entry.revision === "string" ? entry.revision : undefined;
-      let subdir = typeof entry.subdir === "string" ? relativeSubdir(entry.subdir) : undefined;
-      if (typeof entry.source === "string") {
-        source = entry.source;
-        local = !gitSource(source);
-      } else {
-        const origin = object(entry.source, `Source for ${name}`);
-        const kind = origin.source ?? origin.type;
-        if (
-          typeof origin.path === "string" &&
-          (!kind || kind === "directory" || kind === "local")
-        ) {
-          source = origin.path;
-          local = true;
-        } else if (
-          kind === "github" &&
-          typeof origin.repo === "string" &&
-          /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(origin.repo)
-        ) {
-          source = `https://github.com/${origin.repo}.git`;
-        } else if ((kind === "git" || kind === "repository") && typeof origin.url === "string")
-          source = origin.url;
-        else throw new Error(`Marketplace plugin ${name}: unsupported source format`);
-        revision =
-          typeof origin.sha === "string"
-            ? origin.sha
-            : typeof origin.ref === "string"
-              ? origin.ref
-              : revision;
-        subdir = typeof origin.path === "string" && !local ? relativeSubdir(origin.path) : subdir;
-      }
-      if (local) {
-        if (!source.startsWith("./"))
-          throw new Error(`Marketplace plugin ${name}: local source must start with ./`);
-        await containedPath(root, source);
-        if (subdir) await containedPath(root, join(source, subdir));
-      } else if (!gitSource(source))
-        throw new Error(`Marketplace plugin ${name}: unsupported repository URL`);
+      const plugin = await readCatalogEntry(root, name, entry);
       names.add(name);
-      plugins.push({
-        name,
-        description: typeof entry.description === "string" ? entry.description : undefined,
-        source,
-        local,
-        revision,
-        subdir,
-      });
+      plugins.push(plugin);
     } catch (error) {
       unsupported.push(error instanceof Error ? error.message : String(error));
     }
