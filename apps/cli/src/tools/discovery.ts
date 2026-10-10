@@ -14,9 +14,10 @@ export function createDiscoveryTool(
       "Discover extension/MCP tools or skills by intent. Matching tool schemas become available on the next turn; skill bodies load only via skills_load.",
     kind: "read",
     inputSchema: objectSchema({ query: stringSchema }, ["query"]),
-    async execute(args) {
+    async execute(args, context) {
       const query = String(args.query);
-      await options.discover?.(query);
+      await options.discover?.(query, context.signal);
+      context.signal.throwIfAborted();
 
       const matches = registry.search(query);
       registry.activate(matches.map((tool) => tool.name));

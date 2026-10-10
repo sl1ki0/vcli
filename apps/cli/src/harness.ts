@@ -58,7 +58,7 @@ export async function createHarness(
     skillList: () => skills.map((s) => ({ ...s, name: `${s.plugin}:${s.name}` })),
     loadSkill: (name) => loadSkill(name, skills),
     record: (values) => runtime.record(values),
-    discover: async () => {
+    discover: async (_query, signal) => {
       if (discovered || !servers.length) return;
       await permissions.authorize(
         {
@@ -70,8 +70,11 @@ export async function createHarness(
         },
         { servers: servers.map((s) => ({ name: s.name, type: s.type, command: s.command })) },
       );
+      signal.throwIfAborted();
+      const tools = await mcp.discover(undefined, signal);
+      signal.throwIfAborted();
+      for (const tool of tools) registry.register(tool);
       discovered = true;
-      for (const tool of await mcp.discover()) registry.register(tool);
     },
   });
   runtime = new AgentRuntime({
