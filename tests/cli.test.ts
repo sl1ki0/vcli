@@ -165,7 +165,9 @@ describe("CLI configuration and non-TTY operation", () => {
         "--project",
       ]);
       expect(denied.code).toBe(1);
-      expect(denied.stderr).toContain("API credentials belong in environment variables");
+      expect(denied.stderr).toContain(
+        "Use vcli setup or environment variables for API credentials",
+      );
       expect(await readFile(join(w.root, ".vcli/config.json"), "utf8")).not.toContain(
         "do-not-store",
       );

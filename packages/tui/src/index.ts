@@ -1,6 +1,12 @@
 import { createCliRenderer } from "@opentui/core";
 import type { WorkspaceOptions } from "./contracts.ts";
-export type { WorkspaceOptions } from "./contracts.ts";
+export { WorkspaceSettingsError } from "./contracts.ts";
+export type {
+  WorkspaceOptions,
+  WorkspaceSettings,
+  WorkspaceSettingsUpdate,
+  WorkspaceProvider,
+} from "./contracts.ts";
 
 export async function startWorkspace(options: WorkspaceOptions): Promise<void> {
   // Install the client resolver before loading Solid or JSX from another project's cwd.

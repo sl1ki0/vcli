@@ -13,6 +13,11 @@ import { discoverSkills, loadSkill, McpManager, PluginManager } from "@vcli/inte
 import { configHome, type Config } from "./config.ts";
 import { registerBuiltins } from "./builtin-tools.ts";
 import { SqliteSessionStore } from "./store.ts";
+import { resolveCredential } from "./credentials.ts";
+
+export interface HarnessOptions {
+  apiKey?: string;
+}
 
 export async function createHarness(
   root: string,
@@ -20,12 +25,18 @@ export async function createHarness(
   architecture: ArchitectureService,
   emit?: (event: RuntimeEvent) => void | Promise<void>,
   approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,
+  options: HarnessOptions = {},
 ) {
   if (!config.model)
     throw new Error(
-      "Select a model: vcli config set provider <provider>; vcli config set model <model-id>. Set its API key in the environment.",
+      "Select a provider and model with vcli setup or /connect. For shell setup, use vcli config set provider <provider> and vcli config set model <model-id>.",
     );
-  const provider = createProvider(config);
+  const credential = await resolveCredential(config, options.apiKey);
+  if (credential.status === "missing")
+    throw new Error(
+      `No ${config.provider} API key configured. Add it with vcli setup or /connect, or set the provider environment variable.`,
+    );
+  const provider = createProvider({ ...config, apiKey: credential.apiKey });
   const store = await SqliteSessionStore.open(root);
   const registry = new ToolRegistry();
   const manager = new PluginManager(join(configHome(), "extensions"));
