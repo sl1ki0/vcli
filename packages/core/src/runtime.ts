@@ -10,6 +10,7 @@ export interface RuntimeOptions {
 export class AgentRuntime {
   readonly settings: ContextSettings;
   private session?: Session;
+  private readonly readSpans = new Map<string, { revision: string; lines: Map<number, string> }>();
   constructor(private readonly options: RuntimeOptions) { this.settings = { ...balanced, ...options.settings }; }
   get currentSession(): Session | undefined { return this.session; }
   private async emit(type: RuntimeEvent["type"], data: Record<string, unknown>): Promise<void> {
@@ -25,6 +26,7 @@ export class AgentRuntime {
     await this.options.store.save(this.session);
   }
   async run(prompt: string, signal: AbortSignal, resumeId?: string): Promise<Session> {
+    this.readSpans.clear();
     const { root, provider, store, architecture, tools } = this.options;
     this.session = resumeId ? await store.get(resumeId) : await store.create(root, provider, prompt);
     if (!this.session) throw new Error(`Session not found: ${resumeId}`);
@@ -85,26 +87,40 @@ export class AgentRuntime {
             return { call, result: { text: error instanceof Error ? error.message : String(error), isError: true } };
           }
         };
-        const results: { call: ToolCall; result: ToolResult }[] = [];
+        let mutated = false;
+        const recordResult = async ({ call, result }: { call: ToolCall; result: ToolResult }) => {
+          const full = result.fullOutput ?? result.text;
+          const artifact = await store.putArtifact(session.id, full);
+          let content = result.text;
+          const details = result.details as { sourcePath?: string; revision?: string } | undefined;
+          if (call.name === "files_read" && details?.sourcePath && details.revision && result.fullOutput) {
+            let known = this.readSpans.get(details.sourcePath);
+            if (!known || known.revision !== details.revision) { known = { revision: details.revision, lines: new Map() }; this.readSpans.set(details.sourcePath, known); }
+            const fresh: string[] = []; const prior = new Set<string>();
+            for (const line of full.split("\n")) {
+              const number = Number(line.match(/^(\d+): /)?.[1]);
+              if (!number) { fresh.push(line); continue; }
+              const handle = known.lines.get(number);
+              if (handle) prior.add(handle); else fresh.push(line);
+              known.lines.set(number, artifact);
+            }
+            if (prior.size) content = `${details.sourcePath}\n${fresh.join("\n")}\nUnchanged overlapping lines omitted; earlier artifacts: ${[...prior].slice(0, 8).join(", ")}. Retrieve this result for the complete requested span.`;
+          }
+          const output = `${boundText(content, this.settings.resultTokens)}\nFull result: ${artifact}`;
+          session.messages.push({ role: "tool", text: output, toolCallId: call.id, toolName: call.name });
+          session.ledger.touchedPaths = [...new Set([...session.ledger.touchedPaths, ...result.changedPaths ?? []])];
+          if (call.name === "shell_run") session.ledger.verification.push(boundText(result.text, 400));
+          mutated ||= tools.get(call.name)?.kind !== "read";
+          await store.save(session);
+          await this.emit("tool-end", { callId: call.id, name: call.name, result: output, artifact, isError: result.isError ?? false, details: result.details, changedPaths: result.changedPaths });
+        };
         // Read batches may run concurrently; writes and arbitrary shell effects form barriers.
         for (let i = 0; i < calls.length;) {
           if (tools.get(calls[i]!.name)?.kind === "read") {
             const reads: ToolCall[] = [];
-            while (i < calls.length && tools.get(calls[i]!.name)?.kind === "read") reads.push(calls[i++]!);
-            results.push(...await Promise.all(reads.map(execute)));
-          } else results.push(await execute(calls[i++]!));
-        }
-        let mutated = false;
-        for (const { call, result } of results) {
-          const full = result.fullOutput ?? result.text;
-          const artifact = await store.putArtifact(session.id, full);
-          const output = `${boundText(result.text, this.settings.resultTokens)}\nFull result: ${artifact}`;
-          session.messages.push({ role: "tool", text: output, toolCallId: call.id, toolName: call.name });
-          session.ledger.touchedPaths = [...new Set([...session.ledger.touchedPaths, ...result.changedPaths ?? []])];
-          if (call.name === "shell_run") session.ledger.verification.push(boundText(result.text, 400));
-          mutated ||= tools.get(call.name)?.kind !== "read" && !result.isError;
-          await store.save(session);
-          await this.emit("tool-end", { callId: call.id, name: call.name, result: output, artifact, isError: result.isError ?? false, details: result.details, changedPaths: result.changedPaths });
+            while (i < calls.length && reads.length < 4 && tools.get(calls[i]!.name)?.kind === "read") reads.push(calls[i++]!);
+            for (const result of await Promise.all(reads.map(execute))) await recordResult(result);
+          } else await recordResult(await execute(calls[i++]!));
         }
         if (mutated) { graph = await architecture.scan(root); await this.emit("architecture", { graph, revision: graph.revision }); }
         if (turn === this.settings.maxTurns - 1) session.status = "budget";

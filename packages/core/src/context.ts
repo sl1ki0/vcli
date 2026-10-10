@@ -3,9 +3,18 @@ import type { ArchitectureGraph, ContextPlanner, ContextSettings, Message, Model
 // Conservative local estimate; actual provider usage is tracked separately.
 export const estimateTokens = (value: string): number => Math.ceil(new TextEncoder().encode(value).length / 3);
 export function boundText(value: string, tokens: number): string {
-  if (estimateTokens(value) <= tokens) return value;
-  const chars = Math.max(0, Math.floor(tokens * 1.3));
-  return `${value.slice(0, chars)}\n[… omitted; retrieve the full artifact …]\n${value.slice(-Math.floor(chars / 2))}`;
+  const bytes = new TextEncoder().encode(value);
+  if (Math.ceil(bytes.length / 3) <= tokens) return value;
+  const marker = "\n[… omitted; retrieve the full artifact …]\n";
+  const available = Math.max(0, Math.floor(tokens * 3) - new TextEncoder().encode(marker).length);
+  if (estimateTokens(marker) > tokens) return "[omitted]".slice(0, Math.max(0, Math.floor(tokens * 3)));
+  // Move byte boundaries to UTF-8 character boundaries, without allocating
+  // an array of every character from a potentially large command output.
+  let head = Math.floor(available * 2 / 3), tail = bytes.length - Math.floor(available / 3);
+  while (head > 0 && (bytes[head]! & 0xc0) === 0x80) head--;
+  while (tail < bytes.length && (bytes[tail]! & 0xc0) === 0x80) tail++;
+  const decoder = new TextDecoder();
+  return decoder.decode(bytes.subarray(0, head)) + marker + decoder.decode(bytes.subarray(tail));
 }
 export const balanced: ContextSettings = {
   promptTokens: 32_000, mapTokens: 4_000, schemaTokens: 4_000,

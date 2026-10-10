@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AgentRuntime, balanced, BudgetContextPlanner, estimateTokens, PermissionGate, ToolRegistry, diffGraph, type ArchitectureGraph, type ArchitectureService, type ModelEvent, type ProviderAdapter, type RuntimeEvent, type Session, type SessionStore } from "../src/index.ts";
+import { AgentRuntime, balanced, boundText, BudgetContextPlanner, estimateTokens, PermissionGate, ToolRegistry, diffGraph, type ArchitectureGraph, type ArchitectureService, type ModelEvent, type ProviderAdapter, type RuntimeEvent, type Session, type SessionStore } from "../src/index.ts";
 
 const graph: ArchitectureGraph = { root: "/project", revision: "a", nodes: [{ id: "a", label: "app", kind: "module", path: "app.ts" }], edges: [], cycles: [], diagnostics: [], stats: { files: 1, parsed: 1, cached: 0, durationMs: 1 } };
 const architecture: ArchitectureService = { scan: async () => graph, readDesign: async () => ({ version: 1, components: [], decisions: [] }), writeDesign: async () => {}, intendedGraph: () => graph, check: () => [] };
@@ -14,6 +14,12 @@ class MemoryStore implements SessionStore {
 }
 function scripted(turns: ModelEvent[][]): ProviderAdapter { let index = 0; return { id: "fake", model: "test", contextWindow: 64_000, async *stream() { for (const event of turns[index++] ?? [{ type: "done" }]) yield event; } }; }
 describe("harness boundaries", () => {
+  test("Unicode results remain inside byte-estimated budgets without broken characters", () => {
+    for (const budget of [0, 1, 10, 20, 200, 3000]) {
+      const text = boundText("Архитектура 🧩 中文 ".repeat(3000), budget);
+      expect(estimateTokens(text)).toBeLessThanOrEqual(budget); expect(text).not.toContain("�");
+    }
+  });
   test("validates arguments before running tools", async () => {
     const tools = new ToolRegistry(); let called = false;
     tools.register({ name: "read", description: "read", kind: "read", eager: true, inputSchema: { type: "object", required: ["path"], properties: { path: { type: "string" } } }, execute: async () => { called = true; return { text: "ok" }; } });
