@@ -4,9 +4,13 @@ export function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function slash(path: string): string { return path.replaceAll("\\", "/"); }
+export function slash(path: string): string {
+  return path.replaceAll("\\", "/");
+}
 
-export function compare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
+export function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 /** Paths without wildcards name a file or an entire directory. */
 export function matchesPath(path: string, pattern: string): boolean {
@@ -19,8 +23,10 @@ export function matchesPath(path: string, pattern: string): boolean {
     const c = pattern[i]!;
     if (c === "*" && pattern[i + 1] === "*") {
       i++;
-      if (pattern[i + 1] === "/") { i++; expression += "(?:.*/)?"; }
-      else expression += ".*";
+      if (pattern[i + 1] === "/") {
+        i++;
+        expression += "(?:.*/)?";
+      } else expression += ".*";
     } else if (c === "*") expression += "[^/]*";
     else if (c === "?") expression += "[^/]";
     else expression += c.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
