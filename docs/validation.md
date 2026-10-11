@@ -9,9 +9,9 @@ Formatting, strict type checking, declared package dependencies, native packagin
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
 
-The [macOS and Linux CI run](https://github.com/sl1ki0/vcli/actions/runs/38065175676)
+The [macOS and Linux CI run](https://github.com/sl1ki0/vcli/actions/runs/38142726617)
 passed the same checks, including native builds, standalone pseudoterminal smoke,
-the benchmark and release artifact upload.
+first-run project/provider/key/budget setup, the benchmark and release artifact upload.
 
 ## Automated coverage
 
