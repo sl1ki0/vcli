@@ -7,6 +7,7 @@ export async function terminalSmoke(
   protocol: "off" | "kitty",
 ) {
   let output = "",
+    dismissedWelcome = false,
     sentQuit = false,
     timedOut = false;
   const child = Bun.spawn(
@@ -23,6 +24,11 @@ export async function terminalSmoke(
         rows: 35,
         data(terminal, bytes) {
           output = (output + new TextDecoder().decode(bytes)).slice(-2_000_000);
+          if (!dismissedWelcome && output.includes("Welcome to vcli")) {
+            dismissedWelcome = true;
+            // Setup is covered by onboardingSmoke; this check exercises the canvas.
+            setTimeout(() => terminal.write("\u001b"), 100);
+          }
           const ready =
             protocol === "off"
               ? output.includes("Architecture observed")

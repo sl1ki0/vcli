@@ -1,6 +1,6 @@
 # Offline context benchmark
 
-Measured 2026-10-10T15:46:49.097Z. This benchmark measures prompt size, local preparation time and source evidence presence. **No model requests or paid APIs were called.** It does not measure task completion, answer accuracy, retries, total session tokens, provider tokenization, cached-token billing or remote model latency.
+Measured 2026-10-11T13:19:22.403Z. This benchmark measures prompt size, local preparation time and source evidence presence. **No model requests or paid APIs were called.** It does not measure task completion, answer accuracy, retries, total session tokens, provider tokenization, cached-token billing or remote model latency.
 
 ## Reproduce
 
@@ -10,8 +10,8 @@ Use `--json` for the full machine-readable report and `--iterations 50` to chang
 
 ## Fixture and method
 
-- Production source corpus: 62 module files under `apps/*/src` and `packages/*/src`, with tests, build scripts, dependencies, binaries and documentation excluded. Raw source is 239,612 UTF-8 bytes (79,871 estimated tokens).
-- Source SHA-256: `44e870650f64eb061a702df20ce3cb2aedd7291f13b3ec5a474f81bea09b152f`. Git HEAD: `2d91e2c6e8c3c07795dc2cda0014b26d883228b8`; source hash is authoritative because the working tree can contain changes. Graph revision: `189daef7ca22c8b0855a`; intended-design SHA-256: `69f506c0308d0010bffc2b2f2e6572053804d03d059524a2d19349396cfa9091`. These capture the repository inputs separately from the scripted tool fixture.
+- Production source corpus: 72 module files under `apps/*/src` and `packages/*/src`, with tests, build scripts, dependencies, binaries and documentation excluded. Raw source is 292,168 UTF-8 bytes (97,390 estimated tokens).
+- Source SHA-256: `3bac4c0a4a26fa641f62c9362a668baaa8edad91e6b925de33ae2fcc9a2533fd`. Git HEAD: `c3e26d28fb5b66060acb544bd8a7879bace0eb4e`; source hash is authoritative because the working tree can contain changes. Graph revision: `0e56e303735c2ab1f5c0`; intended-design SHA-256: `69f506c0308d0010bffc2b2f2e6572053804d03d059524a2d19349396cfa9091`. These capture the repository inputs separately from the scripted tool fixture.
 - Environment: Bun 1.3.13, darwin 24.6.0, arm64, Apple M4.
 - Schema fixture: exactly 1,000 deterministic **synthetic** extension schemas across five categories, plus actual built-in schemas. The fixtures represent a large catalog and are never executed. They are not a measurement of an installed marketplace or real MCP server.
 - Both paths receive each identical task question, the same system instruction, ledger, tool-call recipe and retrieved source. Full context injects every production source file with numbered lines, every schema and complete tool results. Optimized context calls actual `repositoryMap`, `boundText`, `BudgetContextPlanner`, `ToolRegistry` and built-in tools, activates up to five search matches, and includes scoped reads around visible search matches. There is no model-driven retrieval here: search patterns and starting paths are scripted and published in the JSON report.
@@ -22,19 +22,19 @@ Use `--json` for the full machine-readable report and `--iterations 50` to chang
 
 | Identical task | Full estimated tokens | Optimized estimated tokens | Reduction | Checked evidence, full → optimized |
 | -------------- | --------------------: | -------------------------: | --------: | ---------------------------------: |
-| visuals        |               369,183 |                     12,189 |     96.7% |                          6/6 → 6/6 |
-| permissions    |               363,580 |                     12,524 |     96.6% |                          5/5 → 5/5 |
-| extensions     |               366,246 |                     15,328 |     95.8% |                          7/7 → 7/7 |
+| visuals        |               389,777 |                     12,193 |     96.9% |                          6/6 → 6/6 |
+| permissions    |               385,139 |                     12,560 |     96.7% |                          5/5 → 5/5 |
+| extensions     |               387,006 |                     15,325 |     96.0% |                          7/7 → 7/7 |
 
 The full-schema stress baseline may exceed a model's context window. The percentages describe these particular prepared prompts, not universal savings or equivalent model outcomes. They include the deliberately large synthetic catalog; the component table separates its contribution from repository context and bounded results.
 
 | Task        | Repository map estimated tokens | Schemas, full → lazy | Tool results, full → bounded | Exposed schemas, initial → discovered / catalog |
 | ----------- | ------------------------------: | -------------------: | ---------------------------: | ----------------------------------------------: |
-| visuals     |                           3,992 |      257,039 → 1,711 |               15,784 → 5,068 |                                   9 → 11 / 1010 |
-| permissions |                           3,991 |      257,039 → 2,484 |               10,682 → 4,722 |                                   9 → 14 / 1010 |
-| extensions  |                           3,996 |      257,039 → 2,477 |               12,931 → 7,063 |                                   9 → 14 / 1010 |
+| visuals     |                           3,994 |      257,039 → 1,711 |               15,739 → 5,068 |                                   9 → 11 / 1010 |
+| permissions |                           3,991 |      257,039 → 2,484 |               11,521 → 4,746 |                                   9 → 14 / 1010 |
+| extensions  |                           3,989 |      257,039 → 2,477 |               13,041 → 7,063 |                                   9 → 14 / 1010 |
 
-The full numbered source snapshot is 271,419 UTF-8 bytes (90,473 estimated tokens); the raw-source count above excludes file headings and line labels. Scoped reads still carry the implementation lines needed to assess the task, while the map contributes module signatures and relations.
+The full numbered source snapshot is 330,711 UTF-8 bytes (110,237 estimated tokens); the raw-source count above excludes file headings and line labels. Scoped reads still carry the implementation lines needed to assess the task, while the map contributes module signatures and relations.
 
 ## Local latency
 
@@ -42,11 +42,11 @@ Both assembly measurements start with the same source, graph, schema and retriev
 
 | Task        | Discovery ms | Retrieval ms | Full assembly median / p95 ms | Optimized assembly median / p95 ms |
 | ----------- | -----------: | -----------: | ----------------------------: | ---------------------------------: |
-| visuals     |         1.19 |        22.68 |                   1.30 / 2.30 |                        0.58 / 0.64 |
-| permissions |         0.59 |        16.14 |                   1.13 / 2.04 |                        0.54 / 0.59 |
-| extensions  |         0.46 |        24.65 |                   1.08 / 1.95 |                        0.56 / 0.62 |
+| visuals     |         1.16 |        18.12 |                   1.38 / 2.53 |                        0.66 / 0.74 |
+| permissions |         0.63 |        14.85 |                   1.26 / 2.25 |                        0.61 / 0.68 |
+| extensions  |         0.48 |        21.93 |                   1.02 / 1.65 |                        0.66 / 0.70 |
 
-Snapshot preparation: first observed scan 55.54 ms, warm verification scan 30.16 ms, source reads 0.42 ms. The first scan may already have a persisted cache; it is **not a cold-scan benchmark**. The warm scan parsed 0 files and reused 79. Registering/validating the 1,000-schema fixture took visuals: 169.17 ms; permissions: 115.06 ms; extensions: 102.87 ms, excluded from prompt assembly timings.
+Snapshot preparation: first observed scan 60.51 ms, warm verification scan 30.96 ms, source reads 0.41 ms. The first scan may already have a persisted cache; it is **not a cold-scan benchmark**. The warm scan parsed 0 files and reused 94. Registering/validating the 1,000-schema fixture took visuals: 160.63 ms; permissions: 118.99 ms; extensions: 101.13 ms, excluded from prompt assembly timings.
 
 ## Evidence coverage
 
@@ -60,8 +60,8 @@ Coverage means a known repository path and its exact numbered implementation lin
 | visuals     | PNG rasterizer and bundled font      | [packages/architecture/src/render.ts:381](../packages/architecture/src/render.ts#L381) | present          |
 | visuals     | Viewport coordinate conversion       | [packages/architecture/src/render.ts:222](../packages/architecture/src/render.ts#L222) | present          |
 | visuals     | Rectangle hit testing                | [packages/architecture/src/render.ts:235](../packages/architecture/src/render.ts#L235) | present          |
-| permissions | Default is YOLO                      | [apps/cli/src/config.ts:26](../apps/cli/src/config.ts#L26)                             | present          |
-| permissions | Settings validate all three modes    | [apps/cli/src/config.ts:46](../apps/cli/src/config.ts#L46)                             | present          |
+| permissions | Default is YOLO                      | [apps/cli/src/config.ts:32](../apps/cli/src/config.ts#L32)                             | present          |
+| permissions | Settings validate all three modes    | [apps/cli/src/config.ts:53](../apps/cli/src/config.ts#L53)                             | present          |
 | permissions | Read and YOLO bypass approvals       | [packages/core/src/tools.ts:85](../packages/core/src/tools.ts#L85)                     | present          |
 | permissions | Read-only denies mutations           | [packages/core/src/tools.ts:86](../packages/core/src/tools.ts#L86)                     | present          |
 | permissions | Ask requires approval callback       | [packages/core/src/tools.ts:87](../packages/core/src/tools.ts#L87)                     | present          |

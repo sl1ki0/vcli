@@ -2,6 +2,7 @@ import { mkdtemp, writeFile, readFile, rm, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { terminalSmoke } from "./smoke-terminal.ts";
+import { onboardingSmoke } from "./smoke-onboarding.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "vcli-packaged-"));
 const binary = join(directory, "vcli");
@@ -52,8 +53,9 @@ try {
   await run("plugins", "list");
   await terminalSmoke(binary, directory, "off");
   await terminalSmoke(binary, directory, "kitty");
+  await onboardingSmoke(binary);
   console.log(
-    `Standalone smoke passed on ${process.platform}/${process.arch}: analysis, worker/font, exports, SQLite, config, plugins, PTY tree/Kitty and terminal cleanup. No checkout dependencies.`,
+    `Standalone smoke passed on ${process.platform}/${process.arch}: analysis, worker/font, exports, SQLite, config, plugins, PTY tree/Kitty, first-run setup and terminal cleanup. No checkout dependencies.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

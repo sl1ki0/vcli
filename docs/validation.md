@@ -4,8 +4,10 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The final local suite passes 96 tests with 428 assertions. Formatting, strict
-type checking and the declared package dependency check also pass.
+The local suite passes 115 tests with 566 assertions, including first-run setup.
+Formatting, strict type checking, declared package dependencies, native packaging,
+standalone terminal smoke and the offline benchmark also pass. The setup coverage
+below was added after the initial build's missing onboarding was reported.
 
 The [macOS and Linux CI run](https://github.com/sl1ki0/vcli/actions/runs/38065175676)
 passed the same checks, including native builds, standalone pseudoterminal smoke,
@@ -36,6 +38,14 @@ the benchmark and release artifact upload.
   Deliberately invalid local Bun preload and dotenv files are ignored.
 - The standalone binary starts in a pseudoterminal with tree and Kitty graphics,
   uploads a real image, and restores the alternate screen and cursor on exit.
+- Source and packaged clients launched in an artifact-only folder show a welcome
+  with actionable commands. A real pseudoterminal opens a separate source project,
+  connects a provider/model, enters a key by typing and bracketed paste, saves token
+  budgets, and completes an official SDK request against a local streaming fixture.
+  Raw terminal output and reconstructed visible frames never contain the key.
+- Session-only credentials remain in memory; explicit local saves use a separate
+  private user credential file. Provider/endpoint scope, environment precedence,
+  reload, inherited-budget clearing, invalid updates and write failures are covered.
 
 No paid model APIs were called. SDK fixture completion proves the orchestration
 contract; it does not establish live model success or production API availability.

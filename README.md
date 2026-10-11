@@ -9,6 +9,12 @@ TypeScript · Bun · OpenTUI/Solid · SQLite · ELK · resvg
 
 ## Start
 
+For a downloaded build, run `./vcli --root /path/to/your/project`. The executable
+opens a welcome screen if no project or provider is ready. Choose **Open project**
+and **Connect provider**. Press **F1** for the command menu, or **Esc** to return to
+the prompt and type `/help`, `/open` or `/connect`. Each build includes a
+[quick-start guide](docs/artifact-quickstart.md).
+
 Install **Bun 1.3.13** and **ripgrep**, then:
 
 ```sh
@@ -19,7 +25,17 @@ bun run dev --root fixtures/sample-project
 The canvas uses real Kitty or Sixel images when detected. Unsupported terminals
 show a navigable tree. Scanning, navigation and export use no model tokens.
 
-Choose a provider and a model you have access to:
+Choose a provider and model through `/connect`, or start setup directly:
+
+```sh
+bun run dev setup --root fixtures/sample-project
+```
+
+Setup includes masked API-key entry and an explicit choice to keep the key for
+this launch or save it in a user-only, unencrypted credential file. Settings are
+saved for the chosen project. Keys are kept separately from project configuration
+and are never shown in status or configuration output. Environment credentials
+also work, with the existing shell setup:
 
 ```sh
 bun run dev config set provider openai
@@ -66,8 +82,12 @@ source inspector; narrow terminals offer switchable canvas, tree and inspector p
 | `r`                      | Refresh from source                       |
 | Ctrl+C                   | Stop the current task; exit when idle     |
 | `q` while canvas focused | Exit                                      |
+| F1                       | Open the command menu                     |
 
-Prompt commands: `/observed`, `/intended`, `/changes`, `/scan`.
+Prompt commands: `/help`, `/open`, `/connect`, `/tokens`, `/config`, `/permission`,
+`/status`, `/sessions`, `/plugins`, `/skills`, `/observed`, `/intended`, `/changes`,
+`/scan`. Configuration and navigation use no model calls. `/tokens` edits the
+context window, prompt/result/schema/map ceilings, response reserve and task budget.
 The intended design appears as soon as `architecture_propose` completes, before
 the next mutation starts. Source changes trigger reconciliation; idle refreshes
 also detect external edits. Changes are compared with the graph at workspace open.
@@ -129,7 +149,8 @@ vcli config show
 
 Precedence: CLI options → project `.vcli/config.json` → user
 `~/.config/vcli/config.json` → defaults. `VCLI_CONFIG_HOME` changes the user directory.
-Credentials stay in environment variables. Context-size estimates use UTF-8 bytes
+Credentials come from environment variables, the current launch, or the separate
+user credential store. Context-size estimates use UTF-8 bytes
 divided by three; provider-reported input, output and cached usage are recorded
 separately. Unchanged overlapping reads are omitted, full outputs remain retrievable,
 and old complete tool groups are pruned while the durable ledger is retained.

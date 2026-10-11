@@ -32,6 +32,7 @@ await copyFile(
   resolve(root, "THIRD_PARTY_NOTICES.md"),
   resolve(root, "dist/THIRD_PARTY_NOTICES.md"),
 );
+await copyFile(resolve(root, "docs/artifact-quickstart.md"), resolve(root, "dist/README.md"));
 await copyFile(
   resolve(root, "packages/architecture/resources/OFL.txt"),
   resolve(root, "dist/JetBrainsMono-OFL.txt"),
