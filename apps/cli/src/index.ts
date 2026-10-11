@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createArchitectureService } from "@vcli/architecture";
-import { parseCliArgs, resolveSettings } from "./args.ts";
+import { configOverrides, parseCliArgs, resolveSettings } from "./args.ts";
 import { HELP } from "./help.ts";
 import { print } from "./io.ts";
 import { interactive } from "./interactive.ts";
@@ -32,8 +32,15 @@ async function main(): Promise<void> {
       return sessionsCommand(action, rest, context);
     case "run":
       return runCommand([action, ...rest].filter(Boolean).join(" "), undefined, context);
+    case "setup":
+      return interactive(root, config, architecture, await architecture.scan(root), {
+        overrides: configOverrides(values),
+        initialCommand: "/connect",
+      });
     case undefined:
-      return interactive(root, config, architecture, await architecture.scan(root));
+      return interactive(root, config, architecture, await architecture.scan(root), {
+        overrides: configOverrides(values),
+      });
     default:
       throw new Error("Unknown command " + command + ". Use --help.");
   }

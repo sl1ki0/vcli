@@ -25,12 +25,16 @@ export function parseCliArgs() {
   return { values, positionals };
 }
 export type CliValues = ReturnType<typeof parseCliArgs>["values"];
-export async function resolveSettings(values: CliValues) {
-  const root = resolve(values.root ?? process.cwd());
+export function configOverrides(values: CliValues): Partial<Config> {
   const overrides: Partial<Config> = {};
   for (const key of ["provider", "model", "permission", "renderer"] as const)
     if (values[key]) (overrides as Record<string, unknown>)[key] = values[key];
   if (values.endpoint) overrides.baseURL = values.endpoint;
+  return overrides;
+}
+export async function resolveSettings(values: CliValues) {
+  const root = resolve(values.root ?? process.cwd());
+  const overrides = configOverrides(values);
   const config = await loadConfig(root, overrides);
   return { root, config };
 }

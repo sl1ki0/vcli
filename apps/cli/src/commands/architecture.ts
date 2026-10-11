@@ -4,6 +4,7 @@ import { layoutGraph, rasterize, renderSvg } from "@vcli/architecture";
 import { print, printTree } from "../io.ts";
 import { interactive } from "../interactive.ts";
 import type { CommandContext } from "./context.ts";
+import { configOverrides } from "../args.ts";
 export async function architectureCommand(
   action: string | undefined,
   rest: string[],
@@ -36,7 +37,8 @@ export async function architectureCommand(
     await mkdir(resolve(output, ".."), { recursive: true });
     await writeFile(output, format === "png" ? rasterize(content) : content);
     print(`Exported ${output}`);
-  } else if (action === "view") await interactive(root, config, architecture, graph);
+  } else if (action === "view")
+    await interactive(root, config, architecture, graph, { overrides: configOverrides(values) });
   else throw new Error("Unknown architecture command");
   return;
 }

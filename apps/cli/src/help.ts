@@ -1,6 +1,7 @@
 export const HELP = `vcli — architecture-first AI coding
 
 vcli                                  Open the visual workspace
+vcli setup                            Connect a provider, model and API key
 vcli run <task> [--json]                Run the coding agent
 vcli architecture scan|view|check      Inspect structure or declared drift
 vcli architecture export --format svg|png|json --output <file>
@@ -15,4 +16,6 @@ Options: --root <path> --provider <openai|anthropic|gemini|compatible>
          --renderer <auto|kitty|sixel|blocks|off> --project --ref <git-ref> --subdir <path>
 API keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, VCLI_COMPATIBLE_API_KEY.
 YOLO is the default. Graph exploration and export require no API key.
+Workspace: F1 or /help for commands; /open <folder>, /connect, /tokens, /config.
+Launch against your source project: vcli --root <project-folder>.
 `;
