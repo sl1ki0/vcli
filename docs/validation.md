@@ -12,8 +12,9 @@ below was added after the initial build's missing onboarding was reported.
 The [onboarding CI run](https://github.com/sl1ki0/vcli/actions/runs/38142726617)
 passed on macOS and Linux, including native builds, standalone pseudoterminal smoke,
 first-run project/provider/key/budget setup, the benchmark and release artifact upload.
-The descriptor-cap and output-draining checks were added afterward and pass locally;
-their cross-platform CI confirmation is pending.
+The [resource-limit and output CI run](https://github.com/sl1ki0/vcli/actions/runs/38176545264)
+also passed on macOS and Linux with all 116 tests, native packaging, a 384-module
+scan under hard and soft file limits of 256, graphics exports and terminal cleanup.
 
 ## Automated coverage
 
