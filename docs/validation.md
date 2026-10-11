@@ -38,6 +38,10 @@ first-run project/provider/key/budget setup, the benchmark and release artifact 
   Deliberately invalid local Bun preload and dotenv files are ignored.
 - The standalone binary starts in a pseudoterminal with tree and Kitty graphics,
   uploads a real image, and restores the alternate screen and cursor on exit.
+- A child process with verified soft and hard file limits of 256 runs packaged
+  help, a 384-module import-chain scan, SVG/PNG exports, tree and Kitty terminal
+  startup and terminal cleanup. The hard limit prevents the runtime from raising
+  the soft limit. No user or system resource settings are changed.
 - Source and packaged clients launched in an artifact-only folder show a welcome
   with actionable commands. A real pseudoterminal opens a separate source project,
   connects a provider/model, enters a key by typing and bracketed paste, saves token
@@ -52,6 +56,14 @@ contract; it does not establish live model success or production API availabilit
 The offline benchmark estimates prepared context size and local preparation
 latency. Live provider token counts, completion rates, retries and inference latency
 remain unmeasured.
+
+The reported macOS startup warning about file descriptors has not been reproduced
+by lowering both limits to 256. The exact warning was reproduced locally by
+making a temporary launch directory's parent unreadable before starting the
+binary. Bun emits it for generic startup errors when the soft limit is low;
+this demonstrates an alternative cause, not a confirmed diagnosis of the user's
+download. The [download guide](artifact-quickstart.md#startup-error-mentioning-file-limits)
+includes a working-directory isolation check.
 
 ## Real-terminal matrix
 
