@@ -1,5 +1,5 @@
 import { type BoxRenderable, type ImageRenderable, type MouseEvent } from "@opentui/core";
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
+import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import {
   layoutGraph,
@@ -12,6 +12,7 @@ import {
 import { diffGraph, type ArchitectureGraph, type RuntimeEvent, type Session } from "@vcli/core";
 import type { WorkspaceOptions } from "./contracts.ts";
 import { createWorkspaceNavigation } from "./workspace-navigation.ts";
+import { createWorkspaceCommands } from "./workspace-commands.ts";
 export function useWorkspaceState(props: WorkspaceOptions) {
   const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
@@ -62,6 +63,18 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     narrowPanel,
     visibleNodes,
   } = navigation;
+  const commands = createWorkspaceCommands({
+    workspace: props,
+    graph,
+    running,
+    activity: setActivity,
+    refresh: () => refresh(),
+    changeView: async (next) => {
+      setView(next);
+      await refresh();
+    },
+    close: () => renderer.destroy(),
+  });
   const treeWidth = createMemo(() => (!narrow() && showTree() ? 25 : 0));
   const inspectorWidth = createMemo(() => (narrow() ? 0 : 28));
   const canvasWidth = createMemo(() =>
@@ -71,7 +84,8 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   const graphics = createMemo(() => {
     capVersion();
     const caps = renderer.capabilities;
-    if (props.renderer === "off" || imageFailed()) return false;
+    if (props.renderer === "off" || imageFailed() || commands.panel() || commands.emptyProject())
+      return false;
     if (narrow() && narrowPanel() !== "canvas") return false;
     if (props.renderer !== "auto") return true;
     return Boolean(
@@ -220,18 +234,12 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       navigation.applySearch(prompt);
       return;
     }
-    if (!prompt.trim() || running()) return;
-    if (prompt.startsWith("/")) {
-      const command = prompt.trim();
-      if (command === "/observed" || command === "/intended" || command === "/changes") {
-        setView(command.slice(1) as "observed" | "intended" | "changes");
-        await refresh();
-      } else if (command === "/scan") await refresh();
-      else setActivity("Commands: /observed /intended /changes /scan. Tab focuses the canvas.");
-      return;
-    }
-    if (!props.run) {
-      setActivity("Configure a provider/model to start coding: vcli config set model <model-id>.");
+    if (!prompt.trim()) return;
+    if (await commands.execute(prompt)) return;
+    if (running()) return;
+    if (!commands.ready() || !props.run) {
+      commands.open("connect");
+      setActivity("Connect a provider and model with /connect before starting a task.");
       return;
     }
     controller = new AbortController();
@@ -283,7 +291,11 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       }
       return;
     }
+    if (commands.handleKey(key)) return;
     navigation.handleKey(key);
+  });
+  usePaste((event) => {
+    commands.handlePaste(event);
   });
   onMount(() => {
     let resolution = JSON.stringify(renderer.resolution);
@@ -318,6 +330,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     controller?.abort();
   });
   return {
+    commands,
     view,
     usage,
     graph,
