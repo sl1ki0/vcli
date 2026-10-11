@@ -8,7 +8,7 @@ export async function configCommand(
 ) {
   const { root, config, architecture, values } = context;
 
-  if (!action || action === "show") print(config);
+  if (!action || action === "show") await print(config);
   else if (action === "set") {
     const [key, ...parts] = rest;
     if (!key || !parts.length) throw new Error("Usage: vcli config set <key> <value>");
@@ -18,7 +18,7 @@ export async function configCommand(
       value = JSON.parse(raw);
     } catch {}
     await setConfig(root, key, value, values.project);
-    print(`Saved ${key}.`);
+    await print(`Saved ${key}.`);
   } else throw new Error("Unknown config command");
   return;
 }

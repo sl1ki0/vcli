@@ -12,10 +12,10 @@ export async function pluginsCommand(
 
   const manager = new PluginManager(join(configHome(), "extensions"));
   const options = { revision: values.ref, subdir: values.subdir };
-  if (action === "list" || !action) print(await manager.list());
+  if (action === "list" || !action) await print(await manager.list());
   else if (action === "install") {
     if (!rest[0]) throw new Error("Plugin source/name required");
-    print(
+    await print(
       values.marketplace
         ? await manager.installFromMarketplace(values.marketplace, rest[0])
         : await manager.install(rest[0], options),
@@ -23,20 +23,20 @@ export async function pluginsCommand(
   } else if (action === "remove") {
     if (!rest[0]) throw new Error("Plugin name required");
     await manager.remove(rest[0]);
-    print("Plugin removed.");
+    await print("Plugin removed.");
   } else if (action === "marketplace") {
     const [operation, name, source] = rest;
-    if (!operation || operation === "list") print(await manager.listMarketplaces());
+    if (!operation || operation === "list") await print(await manager.listMarketplaces());
     else if (operation === "add") {
       if (!name || !source) throw new Error("Marketplace name and source required");
-      print(await manager.addMarketplace(name, source, options));
+      await print(await manager.addMarketplace(name, source, options));
     } else if (operation === "refresh") {
       if (!name) throw new Error("Marketplace name required");
-      print(await manager.refreshMarketplace(name));
+      await print(await manager.refreshMarketplace(name));
     } else if (operation === "remove") {
       if (!name) throw new Error("Marketplace name required");
       await manager.removeMarketplace(name);
-      print("Marketplace removed.");
+      await print("Marketplace removed.");
     } else throw new Error("Unknown marketplace command");
   } else throw new Error("Unknown plugin command");
   return;

@@ -46,7 +46,7 @@ export async function interactive(
   options: InteractiveOptions = {},
 ) {
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
-    print(
+    await print(
       options.initialCommand
         ? "Interactive setup needs a terminal. Use vcli --help for shell configuration commands."
         : printTree(graph),

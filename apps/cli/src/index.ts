@@ -14,7 +14,7 @@ export { printTree } from "./io.ts";
 async function main(): Promise<void> {
   const { values, positionals } = parseCliArgs();
   if (values.help) {
-    print(HELP);
+    await print(HELP);
     return;
   }
   const { root, config } = await resolveSettings(values);

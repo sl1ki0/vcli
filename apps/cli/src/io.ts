@@ -1,7 +1,20 @@
 import { createInterface } from "node:readline/promises";
 import type { ArchitectureGraph, ToolDefinition } from "@vcli/core";
-export function print(value: unknown): void {
-  console.log(
+/** Wait for the destination to drain before completing a CLI write. */
+export function writeOutput(
+  text: string,
+  destination: "stdout" | "stderr" = "stdout",
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process[destination].write(text, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+export async function print(value: unknown): Promise<void> {
+  const output =
     typeof value === "string"
       ? value
       : JSON.stringify(
@@ -13,8 +26,8 @@ export function print(value: unknown): void {
             return data;
           },
           2,
-        ),
-  );
+        );
+  await writeOutput(`${output}\n`);
 }
 export function printTree(graph: ArchitectureGraph): string {
   return [

@@ -14,14 +14,14 @@ export async function architectureCommand(
 
   const graph = await architecture.scan(root);
   if (action === "scan" || !action)
-    print(
+    await print(
       values.json
         ? graph
         : `${printTree(graph)}\nParsed ${graph.stats.parsed}; cached ${graph.stats.cached}; ${Math.round(graph.stats.durationMs)} ms.`,
     );
   else if (action === "check") {
     const drift = architecture.check(graph, await architecture.readDesign(root));
-    print(
+    await print(
       values.json
         ? drift
         : drift.map((d) => d.message).join("\n") || "No declared architecture drift.",
@@ -36,7 +36,7 @@ export async function architectureCommand(
       format === "json" ? JSON.stringify(graph, null, 2) : renderSvg(await layoutGraph(graph));
     await mkdir(resolve(output, ".."), { recursive: true });
     await writeFile(output, format === "png" ? rasterize(content) : content);
-    print(`Exported ${output}`);
+    await print(`Exported ${output}`);
   } else if (action === "view")
     await interactive(root, config, architecture, graph, { overrides: configOverrides(values) });
   else throw new Error("Unknown architecture command");

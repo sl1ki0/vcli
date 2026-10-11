@@ -11,7 +11,7 @@ export async function sessionsCommand(
   if (action === "list") {
     const store = await SqliteSessionStore.open(root);
     try {
-      print(
+      await print(
         (await store.list(root)).map(({ id, status, ledger, usage, updatedAt }) => ({
           id,
           status,
