@@ -4,14 +4,16 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 115 tests with 566 assertions, including first-run setup.
+The local suite passes 116 tests with 579 assertions, including first-run setup.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
 
-The [macOS and Linux CI run](https://github.com/sl1ki0/vcli/actions/runs/38142726617)
-passed the same checks, including native builds, standalone pseudoterminal smoke,
+The [onboarding CI run](https://github.com/sl1ki0/vcli/actions/runs/38142726617)
+passed on macOS and Linux, including native builds, standalone pseudoterminal smoke,
 first-run project/provider/key/budget setup, the benchmark and release artifact upload.
+The descriptor-cap and output-draining checks were added afterward and pass locally;
+their cross-platform CI confirmation is pending.
 
 ## Automated coverage
 
@@ -42,6 +44,9 @@ first-run project/provider/key/budget setup, the benchmark and release artifact 
   help, a 384-module import-chain scan, SVG/PNG exports, tree and Kitty terminal
   startup and terminal cleanup. The hard limit prevents the runtime from raising
   the soft limit. No user or system resource settings are changed.
+- Source and compiled output writers deliver over 1 MB of Unicode JSON and
+  ordered event lines to a delayed pipe reader before exit. CLI commands and
+  headless runtime events await writes, preserving backpressure and key redaction.
 - Source and packaged clients launched in an artifact-only folder show a welcome
   with actionable commands. A real pseudoterminal opens a separate source project,
   connects a provider/model, enters a key by typing and bracketed paste, saves token

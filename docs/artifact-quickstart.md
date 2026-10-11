@@ -69,9 +69,18 @@ The warning alone does not identify the cause. See the
 From the extracted download folder, test startup in an accessible directory:
 
 ```sh
-vcli_binary="$PWD/vcli"
-(cd /tmp && "$vcli_binary" --help)
+vcli_binary="$PWD/vcli"; (cd /tmp && "$vcli_binary" --help)
 ```
+
+Paste this as one line. If zsh reports “no such file or directory,” reopen the
+extracted folder in a fresh terminal and check its location and executable:
+
+```sh
+/bin/pwd -P; /bin/ls -l ./vcli
+```
+
+That error means the saved executable path does not resolve, so the runtime
+has not been tested by that attempt.
 
 If help works, launch from there with an absolute project path:
 
