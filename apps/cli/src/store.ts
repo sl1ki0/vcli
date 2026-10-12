@@ -3,6 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, RuntimeEvent, Session, SessionStore } from "@vcli/core";
+import { initializeSessionSchema } from "./session-schema.ts";
+import { listSessionSummaries, readSession, writeSession } from "./session-history.ts";
 
 export class SqliteSessionStore implements SessionStore {
   private constructor(
@@ -15,10 +17,13 @@ export class SqliteSessionStore implements SessionStore {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await mkdir(artifacts, { recursive: true, mode: 0o700 });
     const db = new Database(join(directory, "sessions.sqlite"), { create: true });
-    db.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, root TEXT NOT NULL, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, data TEXT NOT NULL); CREATE INDEX IF NOT EXISTS events_session ON events(session_id,seq);",
-    );
-    return new SqliteSessionStore(db, artifacts);
+    try {
+      initializeSessionSchema(db);
+      return new SqliteSessionStore(db, artifacts);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
   close(): void {
     this.db.close();
@@ -34,6 +39,7 @@ export class SqliteSessionStore implements SessionStore {
       createdAt: now,
       updatedAt: now,
       messages: [],
+      chat: [],
       ledger: {
         goal,
         constraints: [],
@@ -48,10 +54,10 @@ export class SqliteSessionStore implements SessionStore {
     return session;
   }
   async get(id: string): Promise<Session | undefined> {
-    const row = this.db
-      .query<{ data: string }, [string]>("SELECT data FROM sessions WHERE id=?")
-      .get(id);
-    return row ? (JSON.parse(row.data) as Session) : undefined;
+    return readSession(this.db, id);
+  }
+  async summaries(root: string, limit = 100) {
+    return listSessionSummaries(this.db, root, limit);
   }
   async list(root?: string): Promise<Session[]> {
     const rows = root
@@ -65,12 +71,7 @@ export class SqliteSessionStore implements SessionStore {
     return rows.map((row) => JSON.parse(row.data) as Session);
   }
   async save(session: Session): Promise<void> {
-    session.updatedAt = new Date().toISOString();
-    this.db
-      .query(
-        "INSERT INTO sessions(id,root,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
-      )
-      .run(session.id, session.root, JSON.stringify(session));
+    writeSession(this.db, session);
   }
   async append(event: RuntimeEvent): Promise<void> {
     this.db

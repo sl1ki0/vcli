@@ -10,6 +10,7 @@ import { print, printTree } from "./io.ts";
 import { inspectWorkspace } from "./workspace-inspection.ts";
 import { createWorkspaceSettings } from "./workspace-settings.ts";
 import { credentialScope } from "./credentials.ts";
+import { createWorkspaceHistory } from "./workspace-history.ts";
 
 interface InteractiveOptions {
   overrides?: Partial<Config>;
@@ -76,6 +77,9 @@ export async function interactive(
       settings: await settings.snapshot(),
       configure: settings.configure,
       inspect: (topic) => inspectWorkspace(current.root, topic),
+      sessions: createWorkspaceHistory(current.root, (selected) => {
+        sessionId = selected;
+      }),
       openProject: async (path) => {
         next = await openProject(path, current.root, architecture, options.overrides ?? {});
       },
@@ -93,6 +97,8 @@ export async function interactive(
           sessionId = session.id;
           return session;
         } finally {
+          // Keep failed or interrupted turns available to the next prompt, too.
+          sessionId = harness.runtime.currentSession?.id ?? sessionId;
           await harness.close();
         }
       },
