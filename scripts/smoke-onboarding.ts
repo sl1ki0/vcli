@@ -1,24 +1,13 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTerminalScreen } from "./terminal-screen.ts";
+import { createWorkspaceTerminal } from "./pty-workspace.ts";
 
 const TYPED_KEY = "onboarding_typed_fixture_";
 const PASTED_KEY = "pasted_secret_7392";
 const API_KEY = TYPED_KEY + PASTED_KEY;
 const MODEL = "onboarding-fixture";
 const PROMPT_BUDGET = 12_288;
-
-function redact(text: string): string {
-  for (const secret of [API_KEY, TYPED_KEY, PASTED_KEY]) {
-    text = text.replaceAll(secret, "[redacted]");
-  }
-  return text;
-}
-
-function plainText(text: string): string {
-  return text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-}
 
 /** Exercises public first-run flows in a real PTY with an isolated local model. */
 export async function onboardingSmoke(command: string | string[]) {
@@ -64,98 +53,14 @@ export async function onboardingSmoke(command: string | string[]) {
     },
   });
 
-  let output = "";
-  let terminalFailure: string | undefined;
-  let exitCode: number | undefined;
-  const decoder = new TextDecoder();
-  const screen = createTerminalScreen(140, 42);
-  const listeners = new Set<() => void>();
-  const child = Bun.spawn(
-    [...(typeof command === "string" ? [command] : command), "--renderer", "off"],
-    {
-      cwd: artifacts,
-      env: {
-        ...Bun.env,
-        VCLI_CONFIG_HOME: home,
-        OPENAI_API_KEY: "",
-        ANTHROPIC_API_KEY: "",
-        GEMINI_API_KEY: "",
-        GOOGLE_API_KEY: "",
-        VCLI_COMPATIBLE_API_KEY: "",
-        VCLI_DEBUG: "",
-        BUN_OPTIONS: "",
-        NODE_OPTIONS: "",
-        TERM: "xterm-256color",
-      },
-      terminal: {
-        cols: 140,
-        rows: 42,
-        data(_terminal, bytes) {
-          const text = decoder.decode(bytes, { stream: true });
-          output += text;
-          screen.update(text);
-          if (
-            [API_KEY, TYPED_KEY, PASTED_KEY].some(
-              (secret) => plainText(output).includes(secret) || screen.text().includes(secret),
-            )
-          ) {
-            terminalFailure = "API key appeared in terminal output";
-          }
-          if (output.length > 2_000_000)
-            terminalFailure = "Terminal output exceeded the smoke limit";
-          for (const notify of listeners) notify();
-        },
-      },
-    },
-  );
-  void child.exited.then((code) => {
-    exitCode = code;
-    for (const notify of listeners) notify();
+  const terminal = createWorkspaceTerminal({
+    command,
+    cwd: artifacts,
+    env: { VCLI_CONFIG_HOME: home },
+    secrets: [API_KEY, TYPED_KEY, PASTED_KEY],
+    timeoutMs: 30_000,
   });
-  const deadline = setTimeout(() => {
-    terminalFailure = "First-run smoke exceeded its deadline";
-    child.kill("SIGKILL");
-    for (const notify of listeners) notify();
-  }, 30_000);
-
-  function failure(message: string): Error {
-    return new Error(`${message}: ${redact(screen.text())}`);
-  }
-
-  async function waitFor(label: string, after = 0, timeoutMs = 4000): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const finish = (error?: Error) => {
-        clearTimeout(timer);
-        listeners.delete(check);
-        error ? reject(error) : resolve();
-      };
-      const check = () => {
-        if (terminalFailure) finish(failure(terminalFailure));
-        else if (
-          output.length > after &&
-          (label.includes("\u001b")
-            ? output.slice(after).includes(label)
-            : screen.text().includes(label))
-        )
-          finish();
-        else if (exitCode !== undefined)
-          finish(failure(`Client exited (${exitCode}) before ${label}`));
-      };
-      const timer = setTimeout(() => finish(failure(`Timed out waiting for ${label}`)), timeoutMs);
-      listeners.add(check);
-      check();
-    });
-    // A painted title can precede the input's mount/focus callback by one frame.
-    await Bun.sleep(80);
-  }
-
-  function write(keys: string): number {
-    if (terminalFailure) throw failure(terminalFailure);
-    if (!child.terminal) throw failure("PTY is unavailable");
-    const after = output.length;
-    child.terminal.write(keys);
-    return after;
-  }
+  const { write, waitFor, failure } = terminal;
 
   async function openPanel(command: string, title: string) {
     write("\u001b");
@@ -175,15 +80,16 @@ export async function onboardingSmoke(command: string | string[]) {
   try {
     await waitFor("Welcome to vcli");
     if (
-      !output.includes("Open project") ||
-      !output.includes("Connect provider") ||
-      !output.includes("No source files were found")
+      !terminal.visible().includes("Open project") ||
+      !terminal.visible().includes("Connect provider") ||
+      !terminal.visible().includes("No source files were found")
     ) {
       throw failure("Empty source folder did not show actionable welcome commands");
     }
 
     await openPanel("/help", "Help / commands");
-    if (!output.includes("/tokens")) throw failure("Help did not expose token settings");
+    if (!terminal.visible().includes("/tokens"))
+      throw failure("Help did not expose token settings");
     await openPanel("/open", "Open project");
     await fill(project, "source-project ·");
     await waitFor("onboarding.ts", write("\u001b"));
@@ -234,25 +140,14 @@ export async function onboardingSmoke(command: string | string[]) {
       throw new Error("The configured provider/model/key did not reach the local SDK fixture");
     }
 
-    const quitOffset = write("\u0003");
-    await waitFor("\u001b[?1049l", quitOffset);
-    const code = await child.exited;
-    if (code) throw failure(`First-run client exited with ${code}`);
-    const cleanup = output.slice(quitOffset);
-    if (!cleanup.includes("\u001b[?1049l") || !cleanup.includes("\u001b[?25h")) {
-      throw failure("First-run client did not restore the terminal screen and cursor");
-    }
-    if (terminalFailure) throw failure(terminalFailure);
+    await terminal.quit();
     return {
       modelRequests,
       promptTokens: config.context.promptTokens as number,
       terminalRestored: true,
     };
   } finally {
-    clearTimeout(deadline);
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await child.exited;
-    child.terminal?.close();
+    await terminal.close();
     server.stop(true);
     await rm(directory, { recursive: true, force: true });
   }
