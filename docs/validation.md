@@ -16,6 +16,10 @@ first-run project/provider/key/budget setup, the benchmark and release artifact 
 The [resource-limit and output CI run](https://github.com/sl1ki0/vcli/actions/runs/38176545264)
 also passed on macOS and Linux with all 116 tests, native packaging, a 384-module
 scan under hard and soft file limits of 256, graphics exports and terminal cleanup.
+The [chat and history CI run](https://github.com/sl1ki0/vcli/actions/runs/38294566007)
+passed on macOS and Linux with the 154-test suite, native builds, standalone
+formatted chat/history smoke, first-run setup, graphics, capped file limits and
+the offline benchmark. Both platform artifacts were uploaded successfully.
 
 ## Automated coverage
 
