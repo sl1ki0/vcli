@@ -59,6 +59,11 @@ invalidation. Executor implementations are grouped by responsibility under
 The terminal view consumes a controller; graph navigation owns selection, search
 and viewport interactions separately from agent lifecycle and rendering.
 
+Chat is split into conversation state, task execution, history navigation,
+Markdown presentation and focus controls. The workspace controller assembles these
+with a separate architecture canvas controller. Layout changes disable graphics
+while chat is expanded, and shared canvas dimensions drive rendering and hit testing.
+
 ## Source facts and design
 
 Observed module IDs derive from normalized project-relative paths. Renames become
@@ -83,6 +88,17 @@ artifacts remain local. A tool start is written before its effect; an interrupte
 start without a completion becomes explicit uncertainty on resume. Recovery adds
 an inspect-before-action constraint and never replays a mutation. Provider changes
 remove opaque continuation fields while retaining portable task state.
+
+`Session.chat` is the human conversation, separate from the provider's `messages`
+and budgeted context selection. Message start, text/reasoning deltas and completion
+events use stable message IDs. SQLite appends each event; snapshots and event
+watermarks commit together, so recovery replays only newer deltas. Interrupted
+streaming messages are marked canceled. A separate bounded metadata query lists
+history without loading every conversation or constructing a provider.
+
+Reasoning controls and provider-specific request fields belong to the adapters.
+The core receives normalized text, reasoning, tools and usage events; encrypted
+reasoning and signatures remain in opaque provider continuation metadata.
 
 ## Extending the system
 

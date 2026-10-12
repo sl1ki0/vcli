@@ -4,10 +4,11 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 116 tests with 579 assertions, including first-run setup.
+The local suite passes 154 tests with 800 assertions, including chat and first-run setup.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
+Chat coverage was added after the missing conversation display was reported.
 
 The [onboarding CI run](https://github.com/sl1ki0/vcli/actions/runs/38142726617)
 passed on macOS and Linux, including native builds, standalone pseudoterminal smoke,
@@ -29,7 +30,7 @@ scan under hard and soft file limits of 256, graphics exports and terminal clean
 - Terminal keyboard controls, narrow resizing, capabilities changing during a
   session, proposal presentation before the next edit, and mouse selection after
   resizing. Actual Kitty and Sixel image bytes reach the managed transport.
-- All four provider SDK wire contracts, cancellation, malformed/incomplete streams,
+- All five provider adapters, SDK wire contracts, cancellation, malformed/incomplete streams,
   continuation signatures, usage accounting and bounded retry behavior.
 - All permission modes, budget exhaustion, durable uncertain mutation recovery,
   large output retrieval, Unicode budgets and overlapping-read invalidation.
@@ -56,6 +57,23 @@ scan under hard and soft file limits of 256, graphics exports and terminal clean
 - Session-only credentials remain in memory; explicit local saves use a separate
   private user credential file. Provider/endpoint scope, environment precedence,
   reload, inherited-budget clearing, invalid updates and write failures are covered.
+- Source and compiled clients render a streaming Markdown answer with headings,
+  emphasis, lists, inline code and a TypeScript code block outside the checkout.
+  Sent prompts appear before a gated response; consecutive turns stay visible,
+  new conversations reset model context, history selection makes no model calls,
+  and saved messages restore after restarting the client. Terminal cleanup is checked.
+- Native renderer tests assert bold and inline-code styles, tables, full chat,
+  message selection, reasoning expansion, resizing and long session-list scrolling.
+  Sending from a transcript over 100 rows reveals the prompt, while later streaming
+  respects manual scrolling. Enter during a response retains the unsent draft with feedback.
+- History selection commits before another task can change the active session.
+  Failed preflight messages survive subsequent display reconciliation. Streaming
+  text and reasoning survive a hard-killed child process; event watermarks prevent
+  duplicate replay. Legacy snapshots migrate without losing provider signatures.
+- OpenRouter uses its default endpoint and isolated key; native reasoning choices
+  persist and reach local SDK fixtures. Default omits tuning fields, known unsupported
+  efforts fail before saving, and returned reasoning stays separate from answer text
+  and encrypted/signed continuation. Continuation is saved before completion callbacks.
 
 No paid model APIs were called. SDK fixture completion proves the orchestration
 contract; it does not establish live model success or production API availability.
@@ -67,8 +85,9 @@ The reported macOS startup warning about file descriptors has not been reproduce
 by lowering both limits to 256. The exact warning was reproduced locally by
 making a temporary launch directory's parent unreadable before starting the
 binary. Bun emits it for generic startup errors when the soft limit is low;
-this demonstrates an alternative cause, not a confirmed diagnosis of the user's
-download. The [download guide](artifact-quickstart.md#startup-error-mentioning-file-limits)
+this demonstrates an alternative cause. The user subsequently confirmed the missing
+download had been deleted and a fresh build started successfully. The
+[download guide](artifact-quickstart.md#startup-error-mentioning-file-limits)
 includes a working-directory isolation check.
 
 ## Real-terminal matrix

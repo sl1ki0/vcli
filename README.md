@@ -49,6 +49,7 @@ bun run dev
 | OpenAI Responses                   | `openai`     | `OPENAI_API_KEY`                        |
 | Anthropic Messages                 | `anthropic`  | `ANTHROPIC_API_KEY`                     |
 | Gemini                             | `gemini`     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`    |
+| OpenRouter Chat Completions        | `openrouter` | `OPENROUTER_API_KEY`                    |
 | OpenAI-compatible Chat Completions | `compatible` | `VCLI_COMPATIBLE_API_KEY` when required |
 
 For a compatible server, also set `baseURL` to its API base URL. Model identifiers
@@ -57,19 +58,38 @@ paid model. The conservative default context window is 32,768 tokens. Set
 `contextWindow` to your model's documented limit; the output reserve is subtracted
 from it before preparing context.
 
+OpenRouter uses `https://openrouter.ai/api/v1` by default. Select the gateway model
+ID explicitly, such as the `provider/model` ID from your account, through `/connect`.
+Credentials remain scoped to the selected provider and endpoint.
+
 **YOLO is the default:** the agent uses your filesystem and network privileges
 without approval prompts. Change `permission` to `ask` or `read-only`, or pass
 `--permission` for one run. Ask mode denies execution when no interactive approval
 channel is available. Permission controls are not a filesystem sandbox.
 
-## Architecture workspace
+## Chat and architecture workspace
 
-The canvas gets most of the screen. Wide terminals include a module tree and a
-source inspector; narrow terminals offer switchable canvas, tree and inspector panels.
+The workspace opens with architecture and chat together. Select **Chat**, press
+**F2**, or type `/chat` to hide the architecture and use the full workspace for
+conversation. `/split` restores both; **F3** or `/architecture` expands the canvas.
+Wide architecture views include a module tree and source inspector; narrow terminals
+offer switchable canvas, tree and inspector panels.
+
+Your message appears as soon as you send it. Responses stream underneath it, with
+visible waiting, thinking, tool activity and cancellation states. Markdown renders
+headings, emphasis, inline code, lists, links, tables and code blocks. Click a message
+or focus chat with **Tab** to navigate; the mouse wheel and **Page Up/Down** scroll.
+**Up/Down** move between messages, and **Home/End** jump to the first/latest message.
+Press **Esc** to return to the prompt. **Up** in an empty prompt recalls a sent message.
+
+Open `/history` (also `/sessions`) to select a saved conversation. `/new` starts a
+separate task. History is stored locally, including partial responses after an
+interruption, independently of the model's context budget. Browsing and switching
+history make no model calls.
 
 | Key                      | Action                                    |
 | ------------------------ | ----------------------------------------- |
-| Tab                      | Switch focus between prompt and canvas    |
+| Tab                      | Cycle prompt, canvas and chat focus       |
 | Arrows / mouse click     | Select a module                           |
 | Shift + arrows           | Pan                                       |
 | `+` / `-`                | Zoom                                      |
@@ -83,11 +103,21 @@ source inspector; narrow terminals offer switchable canvas, tree and inspector p
 | Ctrl+C                   | Stop the current task; exit when idle     |
 | `q` while canvas focused | Exit                                      |
 | F1                       | Open the command menu                     |
+| F2                       | Toggle full chat and split view           |
+| F3                       | Toggle full architecture and split view   |
 
-Prompt commands: `/help`, `/open`, `/connect`, `/tokens`, `/config`, `/permission`,
-`/status`, `/sessions`, `/plugins`, `/skills`, `/observed`, `/intended`, `/changes`,
-`/scan`. Configuration and navigation use no model calls. `/tokens` edits the
+Prompt commands: `/help`, `/open`, `/connect`, `/tokens`, `/reasoning`, `/config`,
+`/permission`, `/status`, `/chat`, `/split`, `/architecture`, `/history`, `/sessions`,
+`/new`, `/plugins`, `/skills`, `/observed`, `/intended`, `/changes`, `/scan`.
+Configuration and navigation use no model calls. `/tokens` edits the
 context window, prompt/result/schema/map ceilings, response reserve and task budget.
+`/reasoning` chooses `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+or `max`. `default` preserves the model's native behavior; available levels depend
+on the provider and model. Known incompatible selections are rejected before saving.
+Provider-exposed reasoning appears in a collapsible section of the response;
+opaque continuation data stays separate from displayed text.
+Select an assistant message and press **Space** or **Enter** to show or hide its
+returned reasoning, or click the reasoning section.
 The intended design appears as soon as `architecture_propose` completes, before
 the next mutation starts. Source changes trigger reconciliation; idle refreshes
 also detect external edits. Changes are compared with the graph at workspace open.
@@ -144,6 +174,7 @@ Balanced defaults are configurable:
 ```sh
 vcli config set context.taskTokens 100000
 vcli config set permission ask --project
+vcli config set reasoning high --project
 vcli config show
 ```
 
