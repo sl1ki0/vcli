@@ -1,4 +1,13 @@
 export type PermissionMode = "yolo" | "ask" | "read-only";
+export type ReasoningEffort =
+  | "default"
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 export type ToolKind = "read" | "write" | "execute";
 export type JsonSchema = Record<string, unknown>;
 export interface Usage {
@@ -32,6 +41,7 @@ export interface ModelRequest {
 }
 export type ModelEvent =
   | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
   | { type: "tool-call"; call: ToolCall }
   | { type: "usage"; usage: Usage }
   | { type: "done"; providerData?: unknown };
@@ -132,15 +142,28 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  /** Human-facing conversation, independent of compacted provider context. */
+  chat?: ChatMessage[];
   ledger: TaskLedger;
   usage: Usage;
   /** Reported usage plus conservative reservations for unmeasured requests. */
   budgetSpent?: number;
 }
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  reasoning?: string;
+  createdAt: string;
+  status: "streaming" | "complete" | "failed" | "aborted";
+}
 export interface RuntimeEvent {
   type:
     | "session"
     | "text"
+    | "reasoning"
+    | "message-start"
+    | "message-end"
     | "tool-start"
     | "tool-end"
     | "architecture"

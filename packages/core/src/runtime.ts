@@ -16,6 +16,7 @@ import { balanced, boundText, BudgetContextPlanner, estimateTokens } from "./con
 import { PermissionGate, ToolRegistry } from "./tools.ts";
 
 import { SourceReadCache } from "./source-read-cache.ts";
+import { conversation, startMessage } from "./conversation.ts";
 
 interface ToolExecution {
   call: ToolCall;
@@ -74,12 +75,14 @@ export class AgentRuntime {
     if (!this.session) throw new Error(`Session not found: ${resumeId}`);
     const session = this.session;
     if (session.root !== root) throw new Error("Session belongs to a different project.");
+    conversation(session);
     if (session.provider !== provider.id || session.model !== provider.model) {
       session.messages = session.messages.map((m) => ({ ...m, providerData: undefined }));
       session.provider = provider.id;
       session.model = provider.model;
     }
     session.status = "running";
+    const user = prompt ? startMessage(session, "user", prompt) : undefined;
     if (prompt) session.messages.push({ role: "user", text: prompt });
     await store.save(session);
     await this.emit("session", {
@@ -87,6 +90,13 @@ export class AgentRuntime {
       mode: this.options.permissions.mode,
       goal: session.ledger.goal,
     });
+    if (user)
+      await this.emit("message-start", {
+        messageId: user.id,
+        role: user.role,
+        text: user.text,
+        createdAt: user.createdAt,
+      });
     let graph: ArchitectureGraph;
     try {
       graph = await architecture.scan(root);
@@ -198,18 +208,35 @@ export class AgentRuntime {
     session.budgetSpent = spent + reservation;
     // Save before inference: cancellation or absent usage must not reset a budget.
     await store.save(session);
-    let text = "";
+    const response = startMessage(session, "assistant");
+    await this.emit("message-start", {
+      messageId: response.id,
+      role: response.role,
+      createdAt: response.createdAt,
+    });
     const calls: ToolCall[] = [];
     let providerData: unknown;
     let usage: Usage = { input: 0, output: 0, cached: 0 };
-    for await (const event of provider.stream(request, signal)) {
-      if (event.type === "text") {
-        text += event.text;
-        await this.emit("text", { text: event.text });
+    try {
+      for await (const event of provider.stream(request, signal)) {
+        if (event.type === "text") {
+          response.text += event.text;
+          await this.emit("text", { messageId: response.id, text: event.text });
+        }
+        if (event.type === "reasoning") {
+          response.reasoning = (response.reasoning ?? "") + event.text;
+          await this.emit("reasoning", { messageId: response.id, text: event.text });
+        }
+        if (event.type === "tool-call") calls.push(event.call);
+        if (event.type === "usage") usage = event.usage;
+        if (event.type === "done") providerData = event.providerData;
       }
-      if (event.type === "tool-call") calls.push(event.call);
-      if (event.type === "usage") usage = event.usage;
-      if (event.type === "done") providerData = event.providerData;
+      signal.throwIfAborted();
+      response.status = "complete";
+    } catch (error) {
+      response.status = signal.aborted ? "aborted" : "failed";
+      await this.emit("message-end", { messageId: response.id, status: response.status });
+      throw error;
     }
     session.usage.input += usage.input;
     session.usage.output += usage.output;
@@ -217,12 +244,14 @@ export class AgentRuntime {
     if (usage.input + usage.output > 0) session.budgetSpent = spent + usage.input + usage.output;
     const assistant: Message = {
       role: "assistant",
-      text,
+      text: response.text,
       providerData,
       ...(calls.length ? { toolCalls: calls } : {}),
     };
     session.messages.push(assistant);
     await store.save(session);
+    // Complete presentation only after the provider's continuation is durable.
+    await this.emit("message-end", { messageId: response.id, status: response.status });
     await this.emit("usage", { usage, total: session.usage });
 
     return calls;
