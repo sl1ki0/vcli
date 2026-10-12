@@ -13,6 +13,7 @@ export function parseCliArgs() {
       output: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
+      reasoning: { type: "string" },
       endpoint: { type: "string" },
       permission: { type: "string" },
       renderer: { type: "string" },
@@ -27,7 +28,7 @@ export function parseCliArgs() {
 export type CliValues = ReturnType<typeof parseCliArgs>["values"];
 export function configOverrides(values: CliValues): Partial<Config> {
   const overrides: Partial<Config> = {};
-  for (const key of ["provider", "model", "permission", "renderer"] as const)
+  for (const key of ["provider", "model", "reasoning", "permission", "renderer"] as const)
     if (values[key]) (overrides as Record<string, unknown>)[key] = values[key];
   if (values.endpoint) overrides.baseURL = values.endpoint;
   return overrides;

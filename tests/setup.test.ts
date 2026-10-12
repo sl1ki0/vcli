@@ -12,6 +12,7 @@ import { createWorkspaceSettings } from "../apps/cli/src/workspace-settings.ts";
 const environmentNames = [
   "VCLI_CONFIG_HOME",
   "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
@@ -68,6 +69,150 @@ function fixture() {
 }
 
 describe("workspace setup backend", () => {
+  test("includes OpenRouter without changing defaults or borrowing another provider's credentials", async () => {
+    process.env.OPENAI_API_KEY = "openai-fixture-key";
+    const config = await loadConfig(root);
+    expect(config).toMatchObject({ provider: "openai", model: "", reasoning: "default" });
+    const routerConfig = { ...config, provider: "openrouter" as const };
+    const settings = createWorkspaceSettings(root, routerConfig);
+    expect(await settings.snapshot()).toMatchObject({
+      provider: "openrouter",
+      baseURL: "https://openrouter.ai/api/v1",
+      credential: "missing",
+      reasoning: "default",
+    });
+    process.env.OPENROUTER_API_KEY = "openrouter-fixture-key";
+    expect(await resolveCredential(routerConfig)).toEqual({
+      status: "environment",
+      apiKey: "openrouter-fixture-key",
+    });
+    expect(await resolveCredential({ provider: "openai" })).toEqual({
+      status: "environment",
+      apiKey: "openai-fixture-key",
+    });
+  });
+
+  test("rejects unsupported reasoning before changing settings or saving a connection key", async () => {
+    const settings = createWorkspaceSettings(root, await loadConfig(root));
+    await settings.configure({
+      kind: "connection",
+      provider: "gemini",
+      model: "gemini-3-pro-preview",
+      apiKey: "original-session-key",
+      saveKey: false,
+    });
+    const path = join(root, ".vcli/config.json");
+    const before = await readFile(path, "utf8");
+    await expect(
+      settings.configure({ kind: "reasoning", reasoning: "medium" }),
+    ).rejects.toMatchObject({ field: "reasoning" });
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect((await settings.snapshot()).reasoning).toBe("default");
+    await settings.configure({ kind: "reasoning", reasoning: "low" });
+    const valid = await readFile(path, "utf8");
+    await expect(
+      settings.configure({
+        kind: "connection",
+        provider: "gemini",
+        model: "gemini-2.5-flash",
+        apiKey: "must-not-save-key",
+        saveKey: true,
+      }),
+    ).rejects.toMatchObject({ field: "reasoning" });
+    expect(await readFile(path, "utf8")).toBe(valid);
+    expect(settings.harnessOptions()).toEqual({ apiKey: "original-session-key" });
+    expect(await Bun.file(join(home, "credentials.json")).exists()).toBe(false);
+  });
+
+  test("OpenRouter saved keys share the canonical default URL and isolate custom endpoints", async () => {
+    const settings = createWorkspaceSettings(root, await loadConfig(root));
+    await settings.configure({
+      kind: "connection",
+      provider: "openrouter",
+      model: "vendor/test",
+      apiKey: "router-fixture-key",
+      saveKey: true,
+    });
+    const explicit = { provider: "openrouter" as const, baseURL: "https://openrouter.ai/api/v1/" };
+    expect(credentialScope(explicit)).toBe(credentialScope({ provider: "openrouter" }));
+    expect(await resolveCredential(explicit)).toEqual({
+      status: "saved",
+      apiKey: "router-fixture-key",
+    });
+    expect(
+      await resolveCredential({ provider: "openrouter", baseURL: "https://other.invalid/api/v1" }),
+    ).toEqual({ status: "missing" });
+    expect(await resolveCredential({ provider: "compatible", baseURL: explicit.baseURL })).toEqual({
+      status: "not-required",
+    });
+    await settings.configure({
+      kind: "connection",
+      ...explicit,
+      model: "vendor/test",
+      saveKey: false,
+    });
+    expect(settings.harnessOptions()).toEqual({ apiKey: "router-fixture-key" });
+    await settings.configure({
+      kind: "connection",
+      provider: "openai",
+      model: "chosen-model",
+      saveKey: false,
+    });
+    expect(settings.harnessOptions()).toEqual({});
+    expect(await readFile(join(root, ".vcli/config.json"), "utf8")).not.toContain(
+      "router-fixture-key",
+    );
+  });
+
+  test("reasoning persists across settings snapshots, reloads and a real OpenRouter SDK request", async () => {
+    await put(join(root, ".vcli/config.json"), {
+      projectLabel: "Keep label",
+      context: { mapTokens: 1200 },
+    });
+    const f = fixture();
+    const settings = createWorkspaceSettings(root, await loadConfig(root));
+    try {
+      await settings.configure({
+        kind: "connection",
+        provider: "openrouter",
+        model: "vendor/test",
+        baseURL: f.server.url.origin + "/api/v1",
+        apiKey: "router-session-key",
+        saveKey: false,
+      });
+      expect(await settings.configure({ kind: "reasoning", reasoning: "high" })).toMatchObject({
+        provider: "openrouter",
+        reasoning: "high",
+      });
+      const reloaded = await loadConfig(root);
+      expect(reloaded.reasoning).toBe("high");
+      expect(JSON.parse(await readFile(join(root, ".vcli/config.json"), "utf8"))).toMatchObject({
+        projectLabel: "Keep label",
+        context: { mapTokens: 1200 },
+        reasoning: "high",
+      });
+      const harness = await createHarness(
+        root,
+        reloaded,
+        createArchitectureService(),
+        undefined,
+        undefined,
+        settings.harnessOptions(),
+      );
+      try {
+        expect((await harness.run("Reply ready.", new AbortController().signal)).status).toBe(
+          "complete",
+        );
+      } finally {
+        await harness.close();
+      }
+      expect(f.authorizations).toEqual(["Bearer router-session-key"]);
+      expect(f.requests[0]).toMatchObject({ model: "vendor/test", reasoning: { effort: "high" } });
+    } finally {
+      f.server.stop(true);
+    }
+  });
+
   test("explicit local save persists a retained session key and blank provider switches resolve environment keys", async () => {
     const settings = createWorkspaceSettings(root, await loadConfig(root));
     const target = { provider: "openai" as const, model: "fixture-model", saveKey: false };

@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { configHome, writeJsonAtomic, type Config } from "./config.ts";
+import { OPENROUTER_BASE_URL } from "@vcli/providers";
 
 export type CredentialTarget = Pick<Config, "provider" | "baseURL">;
 export type CredentialStatus = "environment" | "saved" | "session" | "missing" | "not-required";
@@ -15,6 +16,7 @@ interface CredentialFile {
 
 const variables: Record<Config["provider"], string[]> = {
   openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
   gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   compatible: ["VCLI_COMPATIBLE_API_KEY"],
@@ -41,7 +43,9 @@ export function normalizeEndpoint(value?: string): string | undefined {
 
 /** Credentials are scoped to both provider and endpoint, including custom hosted providers. */
 export function credentialScope(target: CredentialTarget): string {
-  return `${target.provider}:${normalizeEndpoint(target.baseURL) ?? "default"}`;
+  const endpoint =
+    target.baseURL ?? (target.provider === "openrouter" ? OPENROUTER_BASE_URL : undefined);
+  return `${target.provider}:${normalizeEndpoint(endpoint) ?? "default"}`;
 }
 
 export function validateApiKey(value: string): string {

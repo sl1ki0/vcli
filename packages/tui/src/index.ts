@@ -6,6 +6,8 @@ export type {
   WorkspaceSettings,
   WorkspaceSettingsUpdate,
   WorkspaceProvider,
+  WorkspaceSessionInfo,
+  WorkspaceSessions,
 } from "./contracts.ts";
 
 export async function startWorkspace(options: WorkspaceOptions): Promise<void> {

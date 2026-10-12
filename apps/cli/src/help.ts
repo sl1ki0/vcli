@@ -11,11 +11,15 @@ vcli plugins list|install <source>|remove <name>
 vcli plugins marketplace add <name> <source>|list|refresh <name>|remove <name>
 vcli plugins install <plugin> --marketplace <name>
 
-Options: --root <path> --provider <openai|anthropic|gemini|compatible>
+Options: --root <path> --provider <openai|anthropic|gemini|openrouter|compatible>
          --model <id> --endpoint <url> --permission <yolo|ask|read-only>
+         --reasoning <default|none|minimal|low|medium|high|xhigh|max>
          --renderer <auto|kitty|sixel|blocks|off> --project --ref <git-ref> --subdir <path>
-API keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, VCLI_COMPATIBLE_API_KEY.
+API keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY or GOOGLE_API_KEY, OPENROUTER_API_KEY,
+          VCLI_COMPATIBLE_API_KEY.
 YOLO is the default. Graph exploration and export require no API key.
 Workspace: F1 or /help for commands; /open <folder>, /connect, /tokens, /config.
+Chat: /chat, /split, /architecture change layout; /history opens conversations;
+      /new starts a conversation; /reasoning adjusts model effort.
 Launch against your source project: vcli --root <project-folder>.
 `;

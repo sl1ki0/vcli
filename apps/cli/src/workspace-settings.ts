@@ -12,6 +12,7 @@ import {
   validateApiKey,
 } from "./credentials.ts";
 import type { HarnessOptions } from "./harness.ts";
+import { OPENROUTER_BASE_URL, REASONING_EFFORTS, validateProviderReasoning } from "@vcli/providers";
 
 interface SessionCredential {
   apiKey: string;
@@ -61,6 +62,10 @@ function settingsPatch(update: WorkspaceSettingsUpdate): ConfigPatch {
       };
     case "permission":
       return { permission: update.permission };
+    case "reasoning":
+      if (!REASONING_EFFORTS.includes(update.reasoning))
+        throw new WorkspaceSettingsError("reasoning", "Choose a supported reasoning effort");
+      return { reasoning: update.reasoning };
     default:
       throw new Error("Unknown settings update");
   }
@@ -86,7 +91,9 @@ export function createWorkspaceSettings(
     return {
       provider: current.provider,
       model: current.model,
-      baseURL: current.baseURL,
+      baseURL:
+        current.baseURL ?? (current.provider === "openrouter" ? OPENROUTER_BASE_URL : undefined),
+      reasoning: current.reasoning ?? "default",
       credential: override?.saved ? "saved" : resolved.status,
       permission: current.permission,
       contextWindow: current.contextWindow ?? 32_768,
@@ -107,6 +114,16 @@ export function createWorkspaceSettings(
       },
     });
     validateBudgets(next);
+    if (update.kind === "connection" || update.kind === "reasoning") {
+      try {
+        validateProviderReasoning(next);
+      } catch (error) {
+        throw new WorkspaceSettingsError(
+          "reasoning",
+          error instanceof Error ? error.message : "Choose a supported reasoning effort",
+        );
+      }
+    }
     const enteredKey =
       update.kind === "connection" && update.apiKey?.trim()
         ? validateApiKey(update.apiKey)

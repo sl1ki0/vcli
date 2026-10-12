@@ -6,15 +6,18 @@ import {
   type ContextSettings,
   type PermissionMode,
   type NormalizedMcpServer,
+  type ReasoningEffort,
 } from "@vcli/core";
+import { REASONING_EFFORTS } from "@vcli/providers";
 
 export interface Config {
-  provider: "openai" | "anthropic" | "gemini" | "compatible";
+  provider: "openai" | "anthropic" | "gemini" | "openrouter" | "compatible";
   model: string;
   permission: PermissionMode;
   renderer: "auto" | "kitty" | "sixel" | "blocks" | "off";
   baseURL?: string;
   contextWindow?: number;
+  reasoning?: ReasoningEffort;
   context: ContextSettings;
   mcpServers: NormalizedMcpServer[];
 }
@@ -31,6 +34,7 @@ const defaults: Config = {
   model: "",
   permission: "yolo",
   renderer: "auto",
+  reasoning: "default",
   context: balanced,
   mcpServers: [],
 };
@@ -47,8 +51,10 @@ async function readJson(path: string): Promise<ConfigFile> {
   }
 }
 export function validateConfig(config: Config): Config {
-  if (!["openai", "anthropic", "gemini", "compatible"].includes(config.provider))
+  if (!["openai", "anthropic", "gemini", "openrouter", "compatible"].includes(config.provider))
     throw new Error("Unknown provider");
+  if (config.reasoning !== undefined && !REASONING_EFFORTS.includes(config.reasoning))
+    throw new Error("Unknown reasoning effort");
   if (!["yolo", "ask", "read-only"].includes(config.permission))
     throw new Error("permission must be yolo, ask, or read-only");
   if (!["auto", "kitty", "sixel", "blocks", "off"].includes(config.renderer))
@@ -94,6 +100,7 @@ export function validateConfig(config: Config): Config {
     renderer: config.renderer,
     baseURL: config.baseURL,
     contextWindow: config.contextWindow,
+    reasoning: config.reasoning ?? "default",
     context: { ...config.context },
     mcpServers: config.mcpServers,
   };
@@ -172,6 +179,7 @@ export async function setConfig(
     "renderer",
     "baseURL",
     "contextWindow",
+    "reasoning",
     "mcpServers",
     ...Object.keys(balanced).map((k) => "context." + k),
     "context.taskTokens",
