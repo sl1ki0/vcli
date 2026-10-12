@@ -8,6 +8,7 @@ import {
   count,
   metadata,
   object,
+  OPENROUTER_BASE_URL,
   objects,
   ProviderError,
   string,
@@ -17,6 +18,7 @@ import {
   type ProviderTransport,
   type WireObject,
 } from "./shared.ts";
+import { chatReasoning, openaiReasoning } from "./reasoning.ts";
 
 function responsesRequest(config: ProviderConfig, request: ModelRequest): WireObject {
   const input: WireObject[] = [];
@@ -52,6 +54,7 @@ function responsesRequest(config: ProviderConfig, request: ModelRequest): WireOb
     store: false,
     include: ["reasoning.encrypted_content"],
     max_output_tokens: request.maxOutputTokens,
+    ...openaiReasoning(config),
     tools: request.tools.map((tool) => ({
       type: "function",
       name: tool.name,
@@ -73,6 +76,8 @@ async function* normalizeResponses(
     abort(signal);
     if (event.type === "response.output_text.delta" || event.type === "response.refusal.delta")
       yield { type: "text", text: string(event.delta) };
+    else if (event.type === "response.reasoning_summary_text.delta")
+      yield { type: "reasoning", text: string(event.delta) };
     else if (event.type === "response.output_item.done")
       output.set(count(event.output_index), object(event.item));
     else if (event.type === "response.completed") {
@@ -124,6 +129,13 @@ function chatRequest(config: ProviderConfig, request: ModelRequest): WireObject 
           type: "function",
           function: { name: call.name, arguments: JSON.stringify(call.arguments) },
         }));
+      if (message.role === "assistant") {
+        const data = metadata(message.providerData, config);
+        if (Array.isArray(data.reasoning_details) && data.reasoning_details.length)
+          entry.reasoning_details = objects(data.reasoning_details);
+        else if (string(data.reasoning_content)) entry.reasoning_content = data.reasoning_content;
+        else if (string(data.reasoning)) entry.reasoning = data.reasoning;
+      }
       messages.push(entry);
     }
   }
@@ -133,6 +145,7 @@ function chatRequest(config: ProviderConfig, request: ModelRequest): WireObject 
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: request.maxOutputTokens,
+    ...chatReasoning(config),
     ...(request.tools.length
       ? {
           tools: request.tools.map((tool) => ({
@@ -149,12 +162,16 @@ function chatRequest(config: ProviderConfig, request: ModelRequest): WireObject 
 }
 
 async function* normalizeChat(
+  config: ProviderConfig,
   events: AsyncIterable<WireObject>,
   signal: AbortSignal,
 ): AsyncIterable<ModelEvent> {
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
   let finish = "";
   let usage: WireObject = {};
+  let reasoning = "";
+  let reasoningContent = "";
+  const reasoningDetails: WireObject[] = [];
   for await (const event of events) {
     abort(signal);
     if (event.error) throw new ProviderError("The compatible provider returned a stream error.");
@@ -163,6 +180,26 @@ async function* normalizeChat(
       objects(event.choices).find((value) => value.index === 0) ?? objects(event.choices)[0];
     if (!choice) continue;
     const delta = object(choice.delta);
+    const details = objects(delta.reasoning_details);
+    // Preserve the exact sequence, including encrypted data and signed fragments.
+    reasoningDetails.push(...structuredClone(details));
+    const thought = string(delta.reasoning) || string(delta.reasoning_content);
+    reasoningContent += string(delta.reasoning_content);
+    const visible =
+      thought ||
+      details
+        .map((part) =>
+          part.type === "reasoning.text"
+            ? string(part.text)
+            : part.type === "reasoning.summary"
+              ? string(part.summary)
+              : "",
+        )
+        .join("");
+    if (visible) {
+      reasoning += visible;
+      yield { type: "reasoning", text: visible };
+    }
     if (typeof delta.content === "string" && delta.content)
       yield { type: "text", text: delta.content };
     for (const part of objects(delta.tool_calls)) {
@@ -190,19 +227,38 @@ async function* normalizeChat(
       cached: count(object(usage.prompt_tokens_details).cached_tokens),
     },
   };
-  yield { type: "done" };
+  yield {
+    type: "done",
+    ...(reasoning || reasoningDetails.length
+      ? {
+          providerData: {
+            provider: config.provider,
+            model: config.model,
+            reasoning,
+            ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+            reasoning_details: reasoningDetails,
+          },
+        }
+      : {}),
+  };
 }
 
 export function openaiProvider(config: ProviderConfig, dependencies: ProviderDependencies) {
-  const compatible = config.provider === "compatible";
+  const compatible = config.provider === "compatible" || config.provider === "openrouter";
   const sdk = (): ProviderTransport => {
     let client: import("openai").default | undefined;
     return async (request, signal) => {
-      if (compatible && !config.baseURL)
+      if (config.provider === "compatible" && !config.baseURL)
         throw new ProviderError("An OpenAI-compatible provider requires baseURL.");
       const key = apiKey(config);
       const { default: OpenAI } = await import("openai");
-      client ??= new OpenAI({ apiKey: key, baseURL: config.baseURL, maxRetries: 0 });
+      client ??= new OpenAI({
+        apiKey: key,
+        baseURL:
+          config.baseURL ?? (config.provider === "openrouter" ? OPENROUTER_BASE_URL : undefined),
+        maxRetries: 0,
+        fetch: dependencies.fetch,
+      });
       const stream = compatible
         ? await client.chat.completions.create(
             request as unknown as ChatCompletionCreateParamsStreaming,
@@ -219,7 +275,9 @@ export function openaiProvider(config: ProviderConfig, dependencies: ProviderDep
     dependencies,
     (request) => (compatible ? chatRequest(config, request) : responsesRequest(config, request)),
     (events, signal) =>
-      compatible ? normalizeChat(events, signal) : normalizeResponses(config, events, signal),
+      compatible
+        ? normalizeChat(config, events, signal)
+        : normalizeResponses(config, events, signal),
     sdk,
   );
 }

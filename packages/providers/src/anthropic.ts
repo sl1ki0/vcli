@@ -16,6 +16,7 @@ import {
   type ProviderTransport,
   type WireObject,
 } from "./shared.ts";
+import { anthropicReasoning } from "./reasoning.ts";
 
 function build(config: ProviderConfig, request: ModelRequest): WireObject {
   const messages: { role: string; content: WireObject[] }[] = [];
@@ -46,6 +47,7 @@ function build(config: ProviderConfig, request: ModelRequest): WireObject {
     model: config.model,
     max_tokens: request.maxOutputTokens,
     stream: true,
+    ...anthropicReasoning(config),
     system: [{ type: "text", text: request.system, cache_control: { type: "ephemeral" } }],
     messages,
     tools: request.tools.map((tool) => ({
@@ -76,6 +78,8 @@ async function* normalize(
       blocks.set(index, block);
       if (block.type === "text" && string(block.text))
         yield { type: "text", text: string(block.text) };
+      else if (block.type === "thinking" && string(block.thinking))
+        yield { type: "reasoning", text: string(block.thinking) };
     } else if (event.type === "content_block_delta") {
       const block = blocks.get(index);
       if (!block)
@@ -86,9 +90,10 @@ async function* normalize(
         yield { type: "text", text: string(delta.text) };
       } else if (delta.type === "input_json_delta")
         inputJson.set(index, (inputJson.get(index) ?? "") + string(delta.partial_json));
-      else if (delta.type === "thinking_delta")
+      else if (delta.type === "thinking_delta") {
         block.thinking = string(block.thinking) + string(delta.thinking);
-      else if (delta.type === "signature_delta")
+        if (string(delta.thinking)) yield { type: "reasoning", text: string(delta.thinking) };
+      } else if (delta.type === "signature_delta")
         block.signature = string(block.signature) + string(delta.signature);
       else if (delta.type === "citations_delta")
         block.citations = [...objects(block.citations), object(delta.citation)];

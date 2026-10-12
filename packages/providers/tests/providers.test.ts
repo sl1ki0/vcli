@@ -292,7 +292,7 @@ const anthropicEvents: WireObject[] = [
   { type: "message_stop" },
 ];
 describe("Anthropic adapter", () => {
-  test("preserves signed thinking without displaying it and counts cumulative usage once", async () => {
+  test("preserves signed thinking separately from answer text and counts cumulative usage once", async () => {
     const { adapter, inputs } = fake("anthropic", anthropicEvents);
     const events = await collect(adapter);
     expect(events.filter((event) => event.type === "text")).toEqual([]);

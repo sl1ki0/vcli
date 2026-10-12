@@ -1,11 +1,30 @@
-import type { ModelEvent, ModelRequest, ProviderAdapter, ToolCall } from "@vcli/core";
+import type {
+  ModelEvent,
+  ModelRequest,
+  ProviderAdapter,
+  ReasoningEffort,
+  ToolCall,
+} from "@vcli/core";
+
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+  "default",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 export interface ProviderConfig {
-  provider: "openai" | "anthropic" | "gemini" | "compatible";
+  provider: "openai" | "anthropic" | "gemini" | "openrouter" | "compatible";
   model: string;
   apiKey?: string;
   baseURL?: string;
   contextWindow?: number;
+  reasoning?: ReasoningEffort;
 }
 
 export type WireObject = Record<string, unknown>;
@@ -16,6 +35,8 @@ export type ProviderTransport = (
 export interface ProviderDependencies {
   /** Replaces only the SDK/network boundary; request mapping and normalization still run. */
   transport?: ProviderTransport;
+  /** Injectable HTTP boundary for the official OpenAI-compatible SDK. */
+  fetch?: typeof fetch;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
@@ -110,6 +131,8 @@ export function adapter(
   sdkTransport: () => ProviderTransport,
 ): ProviderAdapter {
   if (!config.model.trim()) throw new ProviderError("A model name is required.");
+  if (config.reasoning !== undefined && !REASONING_EFFORTS.includes(config.reasoning))
+    throw new ProviderError("Unknown reasoning effort.");
   if (
     config.contextWindow !== undefined &&
     (!Number.isInteger(config.contextWindow) || config.contextWindow < 1024)
@@ -146,6 +169,11 @@ export function adapter(
           const status =
             count(object(error).status ?? object(error).statusCode ?? object(error).code) ||
             undefined;
+          if (status === 400 && config.reasoning && config.reasoning !== "default")
+            throw new ProviderError(
+              `${config.provider} rejected the request with reasoning effort "${config.reasoning}" (HTTP 400). Select a supported effort or use default; check the selected model and request settings.`,
+              status,
+            );
           // SDK messages and causes can contain URLs, request bodies, and credentials.
           throw new ProviderError(
             `${config.provider} model request failed${status ? ` (HTTP ${status})` : ""}. Check the provider settings and connection.`,
@@ -163,9 +191,11 @@ export function apiKey(config: ProviderConfig): string {
       ? ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
       : config.provider === "anthropic"
         ? ["ANTHROPIC_API_KEY"]
-        : config.provider === "compatible"
-          ? ["VCLI_COMPATIBLE_API_KEY"]
-          : ["OPENAI_API_KEY"];
+        : config.provider === "openrouter"
+          ? ["OPENROUTER_API_KEY"]
+          : config.provider === "compatible"
+            ? ["VCLI_COMPATIBLE_API_KEY"]
+            : ["OPENAI_API_KEY"];
   const key = config.apiKey || variables.map((name) => process.env[name]).find(Boolean);
   if (key) return key;
   // Local/OpenAI-compatible services frequently run without authentication.

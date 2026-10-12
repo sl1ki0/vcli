@@ -16,6 +16,7 @@ import {
   type ProviderTransport,
   type WireObject,
 } from "./shared.ts";
+import { geminiReasoning } from "./reasoning.ts";
 
 function build(config: ProviderConfig, request: ModelRequest): WireObject {
   const contents: { role: string; parts: WireObject[] }[] = [];
@@ -66,6 +67,7 @@ function build(config: ProviderConfig, request: ModelRequest): WireObject {
       systemInstruction: request.system,
       maxOutputTokens: request.maxOutputTokens,
       candidateCount: 1,
+      ...geminiReasoning(config),
       ...(request.tools.length
         ? {
             tools: [
@@ -104,8 +106,8 @@ async function* normalize(
     for (const raw of objects(object(candidate.content).parts)) {
       const part = structuredClone(raw);
       parts.push(part);
-      if (typeof part.text === "string" && !part.thought && part.text)
-        yield { type: "text", text: part.text };
+      if (typeof part.text === "string" && part.text)
+        yield { type: part.thought ? "reasoning" : "text", text: part.text };
       if (part.functionCall) {
         const fn = object(part.functionCall);
         if (fn.partialArgs || fn.willContinue)
