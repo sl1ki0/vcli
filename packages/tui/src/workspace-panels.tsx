@@ -1,4 +1,5 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo } from "solid-js";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import type { WorkspaceCommands } from "./workspace-commands.ts";
 
 function SettingsSummary(props: { commands: WorkspaceCommands }) {
@@ -6,7 +7,7 @@ function SettingsSummary(props: { commands: WorkspaceCommands }) {
   return (
     <text fg="#b8c4d2">
       {settings()
-        ? `${settings()!.provider} · ${settings()!.model || "model not set"}\nCredential: ${settings()!.credential} · Permission: ${settings()!.permission.toUpperCase()}\nContext window: ${settings()!.contextWindow.toLocaleString("en-US")} · Prompt: ${settings()!.context.promptTokens.toLocaleString("en-US")} · Output: ${settings()!.context.outputTokens.toLocaleString("en-US")}${settings()!.baseURL ? "\nEndpoint: " + settings()!.baseURL : ""}`
+        ? `${settings()!.provider} · ${settings()!.model || "model not set"}\nCredential: ${settings()!.credential} · Permission: ${settings()!.permission.toUpperCase()} · Reasoning: ${settings()!.reasoning ?? "default"}\nContext window: ${settings()!.contextWindow.toLocaleString("en-US")} · Prompt: ${settings()!.context.promptTokens.toLocaleString("en-US")} · Output: ${settings()!.context.outputTokens.toLocaleString("en-US")}${settings()!.baseURL ? "\nEndpoint: " + settings()!.baseURL : ""}`
         : "No provider connection configured."}
     </text>
   );
@@ -33,6 +34,13 @@ export function WorkspacePanels(props: {
   running: boolean;
 }) {
   const commands = props.commands;
+  let menuScroll: ScrollBoxRenderable | undefined;
+  createEffect(() => {
+    commands.panel();
+    commands.history.sessions();
+    const selected = commands.choice();
+    menuScroll?.scrollChildIntoView(`setup-choice-${selected}`);
+  });
   const title = createMemo(() => {
     switch (commands.panel()) {
       case "welcome":
@@ -45,6 +53,10 @@ export function WorkspacePanels(props: {
         return "Token budgets";
       case "permission":
         return "Permission mode";
+      case "reasoning":
+        return "Reasoning effort";
+      case "history":
+        return "Conversation history";
       case "open":
         return "Open project";
       case "status":
@@ -67,7 +79,13 @@ export function WorkspacePanels(props: {
       <text height={1} fg="#6ee7c2">
         {title()}
       </text>
-      <scrollbox flexGrow={1} width="100%">
+      <scrollbox
+        flexGrow={1}
+        width="100%"
+        ref={(scroll: ScrollBoxRenderable) => {
+          menuScroll = scroll;
+        }}
+      >
         <Show when={commands.panel() === "welcome"}>
           <text fg="#b8c4d2">
             {commands.emptyProject()
@@ -80,8 +98,9 @@ export function WorkspacePanels(props: {
         <Show when={commands.panel() === "help"}>
           <text fg="#b8c4d2">Choose a command, or press Esc and type it in the task input.</text>
           <text fg="#8e9ba9">
-            Tab focus · arrows select · Shift+arrows pan · +/- zoom · Enter drill · / search · t
-            panels · v view · Ctrl+C stop
+            F2 full chat · F3 full architecture · Tab focus · chat ↑/↓ messages · PgUp/PgDn scroll ·
+            Home/End first/latest · Space/Enter reasoning · input ↑ recalls prompts · graph arrows
+            select · Shift+arrows pan · +/- zoom · Ctrl+C stop
           </text>
         </Show>
         <Show when={commands.panel() === "config" || commands.panel() === "status"}>
@@ -125,6 +144,31 @@ export function WorkspacePanels(props: {
             Input budgets use local token estimates. Actual provider usage is tracked separately.
           </text>
         </Show>
+        <Show when={commands.panel() === "reasoning"}>
+          <text fg="#b8c4d2">{`Current effort: ${commands.settings()?.reasoning ?? "default"}. Choose an effort for future requests.`}</text>
+          <text fg="#8e9ba9">
+            Available efforts depend on the model. Unsupported settings produce a clear error.
+            Higher effort may use more tokens. The chat only shows reasoning returned by your
+            provider.
+          </text>
+        </Show>
+        <Show when={commands.panel() === "history"}>
+          <text fg="#b8c4d2">
+            Choose a saved conversation to restore its messages and continue. History is stored
+            locally and opening it makes no model request.
+          </text>
+          <Show when={commands.history.loading()}>
+            <text fg="#8e9ba9">Loading saved conversations…</text>
+          </Show>
+          <Show when={!commands.history.loading() && !commands.history.sessions().length}>
+            <text fg="#8e9ba9">
+              No saved conversations yet. Send your first message to create one.
+            </text>
+          </Show>
+          <Show when={commands.history.error()}>
+            <text fg="#fbbf24">{commands.history.error()}</text>
+          </Show>
+        </Show>
         <Show when={commands.panel() === "open"}>
           <text fg="#b8c4d2">
             Open a folder containing your source. Its architecture will be scanned before switching.
@@ -136,6 +180,7 @@ export function WorkspacePanels(props: {
         <For each={commands.choices()}>
           {(item, index) => (
             <text
+              id={`setup-choice-${index()}`}
               fg={index() === commands.choice() ? "#6ee7c2" : "#b8c4d2"}
               onMouseDown={() => {
                 if (!commands.working()) void item.select();

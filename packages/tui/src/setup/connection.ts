@@ -10,6 +10,7 @@ const providers: { id: WorkspaceProvider; label: string }[] = [
   { id: "anthropic", label: "Anthropic" },
   { id: "gemini", label: "Gemini" },
   { id: "compatible", label: "OpenAI-compatible endpoint" },
+  { id: "openrouter", label: "OpenRouter" },
 ];
 
 export function createConnectionSetup(host: SetupHost) {
@@ -33,7 +34,10 @@ export function createConnectionSetup(host: SetupHost) {
       return {
         label: "Model ID",
         value: model(),
-        placeholder: "Enter the provider's model ID",
+        placeholder:
+          provider() === "openrouter"
+            ? "vendor/model, e.g. openai/gpt-5"
+            : "Enter the provider's model ID",
         hint: "Choose the model available on your account. This does not make a model request.",
       };
     if (step() === "endpoint")
@@ -96,11 +100,13 @@ export function createConnectionSetup(host: SetupHost) {
       // Backend errors can contain request data. Never render them for key setup.
       secret.clear();
       if (error instanceof WorkspaceSettingsError) {
-        setStep(error.field === "budgets" ? "model" : error.field);
+        setStep(error.field === "budgets" || error.field === "reasoning" ? "model" : error.field);
         host.message(
           error.field === "budgets"
             ? `${error.message}. Press F1 and choose /tokens to adjust budgets.`
-            : error.message,
+            : error.field === "reasoning"
+              ? `${error.message}. Press F1 and choose /reasoning to adjust effort.`
+              : error.message,
         );
         return;
       }

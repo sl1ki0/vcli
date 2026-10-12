@@ -1,187 +1,132 @@
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
 import { useWorkspaceState } from "./workspace-state.ts";
-import { EmptyProject, WorkspacePanels } from "./workspace-panels.tsx";
+import { WorkspacePanels } from "./workspace-panels.tsx";
+import { ArchitectureView } from "./architecture-view.tsx";
+import { ChatTranscript } from "./chat/transcript.tsx";
 import type { WorkspaceOptions } from "./contracts.ts";
 export type { WorkspaceOptions } from "./contracts.ts";
+
 export function Workspace(props: WorkspaceOptions) {
   const state = useWorkspaceState(props);
-  const {
-    view,
-    usage,
-    graph,
-    graphics,
-    treeWidth,
-    visibleNodes,
-    selected,
-    collapsed,
-    canvasWidth,
-    canvasHeight,
-    selectAt,
-    image,
-    touched,
-    canvasFocus,
-    protocol,
-    narrow,
-    narrowPanel,
-    inspectorWidth,
-    selectedNode,
-    approval,
-    activity,
-    transcript,
-    searching,
-    running,
-    submit,
-  } = state;
+  const settings = state.commands.settings;
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#111821">
-      <box height={2} paddingLeft={1} flexDirection="column">
+      <box height={2} flexShrink={0} paddingLeft={1} flexDirection="column">
         <text
           height={1}
           wrapMode="none"
           fg="#6ee7c2"
-        >{`vcli   ${view().toUpperCase()}   ${(state.commands.settings()?.permission ?? props.permission).toUpperCase()}   ${state.commands.settings() ? `${state.commands.settings()!.provider}/${state.commands.settings()!.model || "no model"} · key:${state.commands.settings()!.credential}` : "not connected"}   ${usage()}`}</text>
+        >{`vcli   ${state.view().toUpperCase()}   ${(settings()?.permission ?? props.permission).toUpperCase()}   ${settings() ? `${settings()!.provider}/${settings()!.model || "no model"} · key:${settings()!.credential}` : "not connected"}   ${state.usage()}`}</text>
         <text
           height={1}
           wrapMode="none"
           fg="#8e9ba9"
-        >{`${props.root} · ${graph().nodes.length} nodes · ${graph().edges.length} relations · ${graphics() ? (state.imageProtocol() ?? "graphics") : "tree fallback"}`}</text>
+        >{`${props.root} · ${state.graph().nodes.length} nodes · ${state.graph().edges.length} relations · ${state.layout() === "chat" ? "architecture hidden" : state.graphics() ? (state.imageProtocol() ?? "graphics") : "tree fallback"} · reasoning:${settings()?.reasoning ?? "default"}`}</text>
       </box>
-      <Show
-        when={state.commands.panel()}
-        fallback={
-          <Show
-            when={!state.commands.emptyProject()}
-            fallback={
-              <box height={canvasHeight()}>
-                <EmptyProject root={props.root} commands={state.commands} />
-              </box>
-            }
-          >
-            <box flexDirection="row" height={canvasHeight()}>
-              <Show when={treeWidth() > 0}>
-                <scrollbox width={treeWidth()} height="100%" backgroundColor="#17212d">
-                  <For each={visibleNodes()}>
-                    {(node) => (
-                      <text
-                        fg={node.id === selected() ? "#6ee7c2" : "#b8c4d2"}
-                        onMouseDown={() => state.selectNode(node.id)}
-                      >{`${node.parent ? "  " : ""}${collapsed().has(node.id) ? "+ " : ""}${node.label}`}</text>
-                    )}
-                  </For>
-                </scrollbox>
+      <box height={1} flexShrink={0} paddingLeft={1} flexDirection="row" gap={3}>
+        <text
+          fg={state.layout() === "chat" ? "#6ee7c2" : "#94a3b8"}
+          onMouseDown={() => state.changeLayout("chat")}
+        >
+          Chat · F2
+        </text>
+        <text
+          fg={state.layout() === "split" ? "#6ee7c2" : "#94a3b8"}
+          onMouseDown={() => state.changeLayout("split")}
+        >
+          Split
+        </text>
+        <text
+          fg={state.layout() === "architecture" ? "#6ee7c2" : "#94a3b8"}
+          onMouseDown={() => state.changeLayout("architecture")}
+        >
+          Architecture · F3
+        </text>
+        <text
+          fg="#38bdf8"
+          onMouseDown={() => {
+            void state.commands.execute("/history");
+          }}
+        >
+          History
+        </text>
+        <text fg="#38bdf8" onMouseDown={() => state.commands.open("reasoning")}>
+          Reasoning
+        </text>
+        <Show when={state.narrow() && state.layout() !== "chat" && !state.commands.panel()}>
+          <text
+            height={1}
+            fg="#64748b"
+          >{`${state.selectedNode()?.label ?? ""} · ${state.selectedNode()?.path ?? ""}`}</text>
+        </Show>
+      </box>
+      <box height={state.bodyHeight()} flexShrink={0} flexDirection="column">
+        <Show
+          when={state.commands.panel()}
+          fallback={
+            <>
+              <Show when={state.layout() !== "chat"}>
+                <ArchitectureView state={state} root={props.root} />
               </Show>
-              <box
-                ref={state.setCanvasBox}
-                width={canvasWidth()}
-                height={canvasHeight()}
-                onMouseDown={selectAt}
-                flexDirection="column"
-              >
-                <Show
-                  when={image() && graphics()}
-                  fallback={
-                    <scrollbox width="100%" height="100%">
-                      <Show
-                        when={narrow() && narrowPanel() === "inspector"}
-                        fallback={
-                          <>
-                            <text fg="#8e9ba9">{`Architecture ${view()} · ${canvasFocus() ? "canvas focused" : "Tab to navigate"}`}</text>
-                            <For each={visibleNodes()}>
-                              {(node) => (
-                                <text
-                                  fg={node.id === selected() ? "#6ee7c2" : "#b8c4d2"}
-                                  onMouseDown={() => state.selectNode(node.id)}
-                                >{`${node.id === selected() ? "›" : " "} ${node.label}${touched().has(node.path ?? "") ? " [changed]" : ""}\n  ${graph()
-                                  .edges.filter(
-                                    (e) => e.source === node.id && e.kind !== "contains",
-                                  )
-                                  .slice(0, 4)
-                                  .map(
-                                    (e) =>
-                                      graph().nodes.find((n) => n.id === e.target)?.label ??
-                                      e.target,
-                                  )
-                                  .join(" → ")}`}</text>
-                              )}
-                            </For>
-                          </>
-                        }
-                      >
-                        <text fg="#6ee7c2">{selectedNode()?.label ?? "Select a module"}</text>
-                        <text fg="#b8c4d2">{`${selectedNode()?.path ?? ""}\n${selectedNode()?.status ?? ""}\n\n${selectedNode()?.signatures?.join("\n") ?? ""}`}</text>
-                      </Show>
-                    </scrollbox>
-                  }
-                >
-                  <image
-                    id="architecture-image"
-                    ref={state.setImageRef}
-                    source={image()}
-                    width={canvasWidth()}
-                    height={canvasHeight()}
-                    fit="fill"
-                    protocol={protocol()}
-                    onError={state.imageError}
+              <Show when={state.layout() !== "architecture"}>
+                <box height={state.chatHeight()} flexShrink={0}>
+                  <ChatTranscript
+                    conversation={state.conversation}
+                    focused={state.chatFocus()}
+                    running={state.running()}
+                    onFocus={state.focusChat}
+                    onScrollRef={state.setChatScroll}
                   />
-                </Show>
-              </box>
-              <Show when={!narrow()}>
-                <box
-                  width={inspectorWidth()}
-                  paddingLeft={1}
-                  flexDirection="column"
-                  backgroundColor="#17212d"
-                >
-                  <text fg="#6ee7c2">{selectedNode()?.label ?? "Select a module"}</text>
-                  <text fg="#b8c4d2">{`${selectedNode()?.kind ?? ""}\n${selectedNode()?.path ?? ""}\n${selectedNode()?.status ?? ""}\n\n${selectedNode()?.signatures?.slice(0, 6).join("\n") ?? ""}`}</text>
                 </box>
               </Show>
-            </box>
-          </Show>
-        }
-      >
-        <box height={canvasHeight()}>
-          <WorkspacePanels commands={state.commands} root={props.root} running={running()} />
-        </box>
-      </Show>
-      <box height={3} paddingLeft={1} flexDirection="column">
-        <text fg={approval() ? "#fbbf24" : "#8e9ba9"}>
-          {approval() ? `Approve? [y/n] ${approval()!.label}` : activity().slice(-500)}
+            </>
+          }
+        >
+          <WorkspacePanels commands={state.commands} root={props.root} running={state.running()} />
+        </Show>
+      </box>
+      <box height={2} flexShrink={0} paddingLeft={1} flexDirection="column">
+        <text fg={state.approval() ? "#fbbf24" : "#8e9ba9"}>
+          {state.approval()
+            ? `Approve? [y/n] ${state.approval()!.label}`
+            : state.activity().slice(-500)}
         </text>
       </box>
-      <scrollbox height={3} stickyScroll stickyStart="bottom" paddingLeft={1}>
-        <text fg="#dce4ed">
-          {transcript() ||
-            (narrow() ? `${selectedNode()?.label ?? ""} ${selectedNode()?.path ?? ""}` : "")}
-        </text>
-      </scrollbox>
-      <box height={1} paddingLeft={1}>
+      <box height={1} flexShrink={0} paddingLeft={1}>
         <Show
           when={!state.commands.panel()}
           fallback={<text fg="#8e9ba9">Local setup · Esc returns to the workspace</text>}
         >
           <input
             id="task-input"
-            focused={!canvasFocus() && !approval()}
+            ref={state.setInputRef}
+            value={state.inputValue()}
+            onInput={state.setInputValue}
+            focused={!state.canvasFocus() && !state.chatFocus() && !state.approval()}
+            onMouseDown={state.returnToInput}
             placeholder={
-              searching()
+              state.searching()
                 ? "Search modules…"
-                : running()
+                : state.running()
                   ? "Agent working · Ctrl+C stops"
                   : state.commands.ready()
-                    ? "Describe a task · /help commands · /tokens budgets"
+                    ? "Message the model · /help commands · F2 full chat"
                     : "Connect with /connect · /open project · F1 help"
             }
             onSubmit={(value) => {
-              if (typeof value === "string") void submit(value);
+              if (typeof value === "string") void state.submit(value);
             }}
           />
         </Show>
       </box>
-      <text height={1} wrapMode="none" fg="#64748b" onMouseDown={() => state.commands.open("help")}>
-        {narrow()
-          ? "F1 Help · /config settings · /tokens budgets · Tab focus · Ctrl+C stop"
-          : "F1 Help · /config settings · /tokens budgets · Tab focus · arrows select · Shift+arrows pan · +/- zoom · Esc reset · Ctrl+C stop"}
+      <text
+        height={1}
+        flexShrink={0}
+        wrapMode="none"
+        fg="#64748b"
+        onMouseDown={() => state.commands.open("help")}
+      >
+        F1 Help · F2 chat · F3 architecture · /history · /reasoning · Tab focus · Ctrl+C stop
       </text>
     </box>
   );

@@ -269,7 +269,7 @@ describe("visual workspace", () => {
         const treeWidth = width < 110 ? 0 : 25,
           inspectorWidth = width < 110 ? 0 : 28;
         const canvasWidth = width - treeWidth - inspectorWidth,
-          canvasHeight = height - 11;
+          canvasHeight = Math.max(3, Math.floor((height - 7) * 0.5));
         const node = scene.nodes.find((node) => node.id === target)!;
         const point = sceneToViewport(
           { x: node.x + node.width / 2, y: node.y + node.height / 2 },
@@ -283,7 +283,7 @@ describe("visual workspace", () => {
         );
         await setup.mockMouse.click(
           treeWidth + Math.floor(point.x / 10),
-          2 + Math.floor(point.y / 20),
+          3 + Math.floor(point.y / 20),
         );
         await setup.waitForFrame((frame) => frame.includes(`${target}.ts`));
       }

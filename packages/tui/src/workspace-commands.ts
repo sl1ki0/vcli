@@ -7,12 +7,15 @@ import {
   onMount,
   type Accessor,
 } from "solid-js";
-import type { ArchitectureGraph, PermissionMode } from "@vcli/core";
+import type { ArchitectureGraph, PermissionMode, Session } from "@vcli/core";
 import type { WorkspaceOptions, WorkspaceSettingsUpdate } from "./contracts.ts";
 import { createConnectionSetup } from "./setup/connection.ts";
 import { createBudgetSetup } from "./setup/budgets.ts";
 import type { PanelChoice, PanelInput, WorkspacePanel } from "./setup/contracts.ts";
 import { workspaceMenu } from "./setup/commands.ts";
+import { createReasoningSetup, reasoningChoices } from "./setup/reasoning.ts";
+import { createSessionHistory } from "./chat/history.ts";
+export type WorkspaceLayout = "chat" | "split" | "architecture";
 
 type GraphView = "observed" | "intended" | "changes";
 interface CommandOptions {
@@ -23,6 +26,9 @@ interface CommandOptions {
   refresh(): Promise<void>;
   changeView(view: GraphView): Promise<void>;
   close(): void;
+  changeLayout(layout: WorkspaceLayout): void;
+  restoreSession(session: Session): void;
+  clearConversation(): void;
 }
 export function createWorkspaceCommands(options: CommandOptions) {
   const props = options.workspace;
@@ -52,20 +58,43 @@ export function createWorkspaceCommands(options: CommandOptions) {
   };
   const connection = createConnectionSetup({ settings, apply, message: feedback });
   const budgets = createBudgetSetup({ settings, apply, message: feedback });
+  const reasoning = createReasoningSetup({ settings, apply, message: feedback });
+  const history = createSessionHistory({
+    workspace: props,
+    canChange,
+    close: () => cancel(true),
+    activity: options.activity,
+    restore: options.restoreSession,
+    clear: options.clearConversation,
+  });
 
-  function cancel() {
+  function cancel(force = false) {
+    if (history.selecting() && !force) {
+      feedback("Opening the conversation. Please wait for it to finish.");
+      return;
+    }
     connection.clear();
     ++readVersion;
+    history.invalidate();
     setPanel(undefined);
     setMessage("");
   }
   function canChange() {
-    if (!options.running() && !working()) return true;
+    if (!options.running() && !working() && !history.selecting()) return true;
     feedback("Stop the active task before changing settings or opening another project.");
     return false;
   }
   function open(kind: WorkspacePanel) {
-    if (["connect", "tokens", "permission", "open", "config"].includes(kind) && !canChange())
+    if (history.selecting()) {
+      feedback("Opening the conversation. Please wait for it to finish.");
+      return;
+    }
+    if (
+      ["connect", "tokens", "permission", "reasoning", "history", "open", "config"].includes(
+        kind,
+      ) &&
+      !canChange()
+    )
       return;
     connection.clear();
     ++readVersion;
@@ -75,6 +104,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
     if (kind === "tokens") budgets.begin();
     if (kind === "open") setOpenPath(props.root);
     setPanel(kind);
+    if (kind === "history") void history.load();
   }
   async function apply(update: WorkspaceSettingsUpdate) {
     if (!canChange()) throw new Error("Active task must finish first.");
@@ -88,7 +118,9 @@ export function createWorkspaceCommands(options: CommandOptions) {
           ? "Connection saved"
           : update.kind === "budgets"
             ? "Token budgets saved"
-            : "Permission mode saved";
+            : update.kind === "reasoning"
+              ? "Reasoning effort saved"
+              : "Permission mode saved";
       options.activity(
         update.kind === "connection" && settings()?.credential === "missing"
           ? "Provider/model saved. No API key found; use /connect to add one before starting a task."
@@ -142,10 +174,28 @@ export function createWorkspaceCommands(options: CommandOptions) {
   async function execute(text: string): Promise<boolean> {
     const prompt = text.trim();
     if (!prompt.startsWith("/")) return false;
+    if (history.selecting()) {
+      feedback("Opening the conversation. Please wait for it to finish.");
+      return true;
+    }
     const [name, ...args] = prompt.split(/\s+/);
     if (name === "/help" || name === "/commands") open("help");
     else if (name === "/connect") open("connect");
     else if (name === "/tokens") open("tokens");
+    else if (name === "/reasoning") {
+      const effort = reasoningChoices.find((item) => item.value === args[0]);
+      if (effort) await reasoning.save(effort.value);
+      else {
+        open("reasoning");
+        if (args.length) feedback("Choose a supported reasoning effort below.");
+      }
+    } else if (name === "/chat" || name === "/split" || name === "/architecture") {
+      cancel();
+      options.changeLayout(name.slice(1) as WorkspaceLayout);
+    } else if (name === "/history" || name === "/sessions") {
+      if (props.sessions) open("history");
+      else await inspect("sessions");
+    } else if (name === "/new") await history.create();
     else if (name === "/config") open("config");
     else if (name === "/status") open("status");
     else if (name === "/permission") {
@@ -156,8 +206,8 @@ export function createWorkspaceCommands(options: CommandOptions) {
     } else if (name === "/open") {
       open("open");
       if (args.length && canChange()) await openProject(args.join(" "));
-    } else if (name === "/sessions" || name === "/plugins" || name === "/skills")
-      await inspect(name.slice(1) as "sessions" | "plugins" | "skills");
+    } else if (name === "/plugins" || name === "/skills")
+      await inspect(name.slice(1) as "plugins" | "skills");
     else if (name === "/observed" || name === "/intended" || name === "/changes") {
       cancel();
       await options.changeView(name.slice(1) as GraphView);
@@ -173,6 +223,8 @@ export function createWorkspaceCommands(options: CommandOptions) {
   function choices(): PanelChoice[] {
     if (panel() === "connect") return connection.choices();
     if (panel() === "tokens") return budgets.choices();
+    if (panel() === "reasoning") return reasoning.choices();
+    if (panel() === "history") return history.choices();
     return workspaceMenu(panel(), { emptyProject: emptyProject(), execute, cancel, setPermission });
   }
   const input = createMemo<PanelInput | undefined>(() =>
@@ -203,7 +255,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
       if (!working()) cancel();
       return true;
     }
-    if (working()) {
+    if (working() || (panel() === "history" && history.loading())) {
       key.preventDefault();
       key.stopPropagation();
       return true;
@@ -240,13 +292,14 @@ export function createWorkspaceCommands(options: CommandOptions) {
     settings,
     ready,
     emptyProject,
-    working,
+    working: () => working() || history.selecting(),
     message,
     choice,
     choices,
     input,
     connection,
     budgets,
+    history,
     readTitle,
     readContent,
     open,

@@ -25,6 +25,8 @@ export type WorkspacePanel =
   | "connect"
   | "tokens"
   | "permission"
+  | "reasoning"
+  | "history"
   | "open"
   | "status"
   | "read";
