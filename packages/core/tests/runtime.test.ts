@@ -99,6 +99,48 @@ function scripted(turns: ModelEvent[][]): ProviderAdapter {
   };
 }
 describe("harness boundaries", () => {
+  test("cancellation drains every concurrent read before the runtime returns", async () => {
+    const controller = new AbortController();
+    const store = new MemoryStore();
+    const tools = new ToolRegistry();
+    let drained = false;
+    for (const name of ["fast", "slow"])
+      tools.register({
+        name,
+        description: name,
+        kind: "read",
+        eager: true,
+        inputSchema: { type: "object" },
+        execute: async () => {
+          if (name === "fast") {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            controller.abort();
+            throw new Error("Canceled");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          drained = true;
+          throw new Error("Canceled after durable child settlement");
+        },
+      });
+    const runtime = new AgentRuntime({
+      root: "/project",
+      architecture,
+      store,
+      tools,
+      permissions: new PermissionGate("yolo"),
+      provider: scripted([
+        [
+          ...["fast", "slow"].map((name) => ({
+            type: "tool-call" as const,
+            call: { id: name, name, arguments: {} },
+          })),
+        ],
+      ]),
+    });
+    const session = await runtime.run("Read concurrently", controller.signal);
+    expect(session.status).toBe("aborted");
+    expect(drained).toBe(true);
+  });
   test("Unicode results remain inside byte-estimated budgets without broken characters", () => {
     for (const budget of [0, 1, 10, 20, 200, 3000]) {
       const text = boundText("Архитектура 🧩 中文 ".repeat(3000), budget);

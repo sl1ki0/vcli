@@ -9,6 +9,7 @@ import type {
   Session,
   SessionStore,
   ToolCall,
+  ToolContext,
   ToolResult,
   Usage,
 } from "./contracts.ts";
@@ -17,6 +18,7 @@ import { PermissionGate, ToolRegistry } from "./tools.ts";
 
 import { SourceReadCache } from "./source-read-cache.ts";
 import { conversation, startMessage } from "./conversation.ts";
+import { reserveDelegation } from "./delegation-budget.ts";
 
 interface ToolExecution {
   call: ToolCall;
@@ -32,6 +34,14 @@ export interface RuntimeOptions {
   permissions: PermissionGate;
   settings?: Partial<ContextSettings>;
   onEvent?: (event: RuntimeEvent) => void | Promise<void>;
+  instructions?: string | (() => Promise<string>);
+  serialTools?: () => boolean;
+  mode?: "build" | "plan";
+  executeTool?: (
+    call: ToolCall,
+    context: ToolContext,
+    execute: () => Promise<ToolResult>,
+  ) => Promise<ToolResult>;
 }
 export class AgentRuntime {
   readonly settings: ContextSettings;
@@ -42,6 +52,13 @@ export class AgentRuntime {
   }
   get currentSession(): Session | undefined {
     return this.session;
+  }
+  async reserveDelegation(tokens: number) {
+    if (!this.session) throw new Error("No active session");
+    const session = this.session;
+    return reserveDelegation(session, tokens, this.settings.taskTokens, () =>
+      this.options.store.save(session),
+    );
   }
   private async emit(type: RuntimeEvent["type"], data: Record<string, unknown>): Promise<void> {
     const event: RuntimeEvent = {
@@ -74,6 +91,11 @@ export class AgentRuntime {
       : await store.create(root, provider, prompt);
     if (!this.session) throw new Error(`Session not found: ${resumeId}`);
     const session = this.session;
+    session.instructions =
+      typeof this.options.instructions === "function"
+        ? await this.options.instructions()
+        : this.options.instructions;
+    session.mode = this.options.mode ?? session.mode ?? "build";
     if (session.root !== root) throw new Error("Session belongs to a different project.");
     conversation(session);
     if (session.provider !== provider.id || session.model !== provider.model) {
@@ -266,6 +288,8 @@ export class AgentRuntime {
     const tool = tools.get(call.name);
     try {
       if (!tool) throw new Error(`Unknown tool: ${call.name}`);
+      if (session.mode === "plan" && tool.kind !== "read")
+        throw new Error(`Plan mode denies ${tool.name}. Switch to build mode to implement.`);
       await this.options.permissions.authorize(tool, call.arguments);
       // Durable start precedes the side effect.
       await this.emit("tool-start", {
@@ -274,7 +298,10 @@ export class AgentRuntime {
         kind: tool.kind,
         arguments: call.arguments,
       });
-      const result = await tools.execute(call, { root, signal, sessionId: session.id });
+      const context = { root, signal, sessionId: session.id };
+      const result = await tools.executeWith(call, context, (execute) =>
+        this.options.executeTool ? this.options.executeTool(call, context, execute) : execute(),
+      );
       return { call, result };
     } catch (error) {
       if (signal.aborted) throw error;
@@ -327,11 +354,17 @@ export class AgentRuntime {
     const recordResult = (result: ToolExecution) => this.recordToolResult(session, result);
     // Read batches may run concurrently; writes and arbitrary shell effects form barriers.
     for (let i = 0; i < calls.length; ) {
-      if (tools.get(calls[i]!.name)?.kind === "read") {
+      if (tools.get(calls[i]!.name)?.kind === "read" && !this.options.serialTools?.()) {
         const reads: ToolCall[] = [];
         while (i < calls.length && reads.length < 4 && tools.get(calls[i]!.name)?.kind === "read")
           reads.push(calls[i++]!);
-        for (const result of await Promise.all(reads.map(execute))) await recordResult(result);
+        // Drain every child before propagating cancellation: their usage and mutation
+        // records must be durable before the host closes the session store.
+        const results = await Promise.allSettled(reads.map(execute));
+        for (const result of results)
+          if (result.status === "fulfilled") await recordResult(result.value);
+        const failed = results.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
       } else {
         await recordResult(await execute(calls[i++]!));
         mutated = true;

@@ -148,6 +148,9 @@ export interface Session {
   usage: Usage;
   /** Reported usage plus conservative reservations for unmeasured requests. */
   budgetSpent?: number;
+  /** Refreshed local instructions; counted within the active prompt budget. */
+  instructions?: string;
+  mode?: "build" | "plan";
 }
 export interface ChatMessage {
   id: string;
@@ -170,7 +173,8 @@ export interface RuntimeEvent {
     | "usage"
     | "compaction"
     | "status"
-    | "approval";
+    | "approval"
+    | "subagent";
   sessionId: string;
   time: string;
   data: Record<string, unknown>;

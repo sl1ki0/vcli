@@ -61,6 +61,13 @@ export class ToolRegistry {
     return selected;
   }
   async execute(call: ToolCall, context: ToolContext): Promise<ToolResult> {
+    return this.executeWith(call, context, (execute) => execute());
+  }
+  async executeWith(
+    call: ToolCall,
+    context: ToolContext,
+    around: (execute: () => Promise<ToolResult>) => Promise<ToolResult>,
+  ): Promise<ToolResult> {
     const tool = this.tools.get(call.name);
     if (!tool) throw new Error(`Unknown tool ${call.name}; discover it with tools_search.`);
     const validate = this.validators.get(call.name)!;
@@ -69,7 +76,7 @@ export class ToolRegistry {
         `Invalid arguments for ${call.name}: ${this.ajv.errorsText(validate.errors)}`,
       );
     context.signal.throwIfAborted();
-    return tool.execute(call.arguments, context);
+    return around(() => tool.execute(call.arguments, context));
   }
 }
 
