@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 211 tests with 1,124 assertions, including chat, first-run setup
+The local suite passes 212 tests with 1,136 assertions, including chat, first-run setup
 and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
@@ -97,9 +97,12 @@ Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfull
   retains arguments beyond the former 700-character cutoff. Narrow-terminal scrolling,
   Y/N, Escape/Enter denial and cancellation are covered by renderer tests. Source and
   packaged PTY fixtures verify that a declined edit leaves the file unchanged, an
-  accepted edit applies, and both outcomes reach the local provider. The running
-  Ghostty session remains unreviewed because Computer Use denies access to Ghostty;
-  diagnosing that agent's reported blocker still requires a screenshot or transcript.
+  accepted edit applies, and both outcomes reach the local provider.
+- Architecture tool schemas explicitly declare the version as an integer. A local
+  OpenRouter SDK fixture preserves string/number argument types, returns a precise
+  validation error for a string, rediscovers the schema, and persists the corrected
+  numeric version. Invalid arguments trigger no approval, execution start, hooks
+  or checkpoint capture. Argument validation does not coerce model output.
 - History selection commits before another task can change the active session.
   Failed preflight messages survive subsequent display reconciliation. Streaming
   text and reasoning survive a hard-killed child process; event watermarks prevent
@@ -123,6 +126,46 @@ this demonstrates an alternative cause. The user subsequently confirmed the miss
 download had been deleted and a fresh build started successfully. The
 [download guide](artifact-quickstart.md#startup-error-mentioning-file-limits)
 includes a working-directory isolation check.
+
+## Ghostty session review, 2026-10-13
+
+The user supplied three screenshots of a completed OpenRouter/DeepSeek folder-size
+task. Native Ghostty inspection remains blocked. Targeted read-only checks of the
+saved project session confirmed that all four `architecture_propose` calls passed
+`design.version` as the JSON string `"1"`. The tool correctly rejected them; the
+agent's claim that the tool rejected numeric `1` was unsupported. The OpenRouter
+adapter preserves JSON types rather than converting numbers to strings.
+
+The generated Python script and its 12 tests were inspected; all 12 tests passed
+again without modifying the project. A separate temporary fixture confirmed that
+directory symlinks are skipped. This verifies that output, not a general live-model
+completion rate. The screenshot reports 51,306 aggregate tokens, including 20,480
+cached tokens, for this one task.
+
+Follow-up priorities:
+
+- **P1, mitigated:** repeated invalid calls and an unjustified tool-bug claim.
+  Explicit integer schema, expected/received type diagnostics and model guidance
+  now address the observed confusion. A failed proposal is not a persisted design;
+  instructions prohibit bypassing that workflow. An automatic retry limit for
+  repeated argument errors remains open; prompt guidance alone cannot guarantee
+  that a live model will recover.
+- **P1, open:** persistent, readable tool activity in chat. Approval cards now
+  explain requested effects, but normal tool calls/results still only update the
+  activity footer and phase. Retain tool name, state, relevant target, error and
+  artifact access in presentation history, including after restoring a session,
+  without adding UI records to model context.
+- **P2, open in the generated Python example:** its usage docstring advertises
+  `--human`, while its parser supports `--bytes`; `--human` exits with status 2.
+  Traversal silently skips inaccessible entries and can report incomplete totals
+  without a warning. Sorting runs three passes where two, or a single composite
+  key, suffice. The tests do not cover permission failures or symlink behavior.
+- **P2, open:** the agent left a `demo/` fixture in the user's project and called
+  generated example data "real data." Prefer temporary fixtures, clean them up,
+  and describe the evidence accurately. The user withdrew the reported missing
+  chat-message issue after locating their messages; it is not a confirmed defect.
+
+The Python example and its demo files were left unchanged by this review.
 
 ## Real-terminal matrix
 

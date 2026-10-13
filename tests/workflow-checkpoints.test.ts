@@ -113,7 +113,15 @@ const beforeMarker = {
 
 describe("checkpoint execution boundary", () => {
   test("validates tool arguments before hooks or checkpoint capture", async () => {
-    const f = await fixture({ hooks: beforeMarker });
+    const approvals: string[] = [];
+    const f = await fixture({
+      hooks: beforeMarker,
+      permission: "ask",
+      approve: async (tool) => {
+        approvals.push(tool.name);
+        return true;
+      },
+    });
     const call = { ...patch(), arguments: { path: "source.ts", newText: 42 } };
     const session = await f.run([call]);
     expect(session.messages.find((message) => message.role === "tool")!.text).toContain(
@@ -123,6 +131,8 @@ describe("checkpoint execution boundary", () => {
     expect(await f.checkpoints.list()).toEqual([]);
     expect(await readFile(join(f.root, "source.ts"), "utf8")).toContain("value = 1");
     expect(await f.store.pendingMutations(session.id)).toEqual([]);
+    expect(approvals).toEqual([]);
+    expect(f.events.filter((event) => event.type === "tool-start")).toEqual([]);
   });
 
   test("read-only and declined approval never run hooks or create checkpoints", async () => {

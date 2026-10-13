@@ -290,6 +290,7 @@ export class AgentRuntime {
       if (!tool) throw new Error(`Unknown tool: ${call.name}`);
       if (session.mode === "plan" && tool.kind !== "read")
         throw new Error(`Plan mode denies ${tool.name}. Switch to build mode to implement.`);
+      tools.validate(call);
       await this.options.permissions.authorize(tool, call.arguments);
       // Durable start precedes the side effect.
       await this.emit("tool-start", {

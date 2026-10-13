@@ -99,6 +99,89 @@ async function settings(root: string, endpoint: string, permission: "yolo" | "re
 }
 
 describe("architecture-first harness acceptance", () => {
+  test("OpenRouter preserves argument types and a rejected version is corrected before approval", async () => {
+    const root = await project();
+    const previousHome = process.env.VCLI_CONFIG_HOME;
+    process.env.VCLI_CONFIG_HOME = join(root, ".vcli", "isolated-home");
+    const design: ArchitectureDesign = {
+      version: 1,
+      components: [{ id: "app", label: "Application", paths: ["src/**"] }],
+      decisions: [],
+    };
+    const approvals: string[] = [];
+    const events: RuntimeEvent[] = [];
+    const model = fixture((request, turn) => {
+      if (turn === 0)
+        return {
+          calls: [{ name: "architecture_propose", args: { design: { ...design, version: "1" } } }],
+        };
+      if (turn === 1) {
+        expect(
+          request.messages.some(
+            (message) =>
+              message.role === "tool" &&
+              message.content?.includes("/design/version: expected integer; received string"),
+          ),
+        ).toBe(true);
+        expect(approvals).toEqual([]);
+        return { calls: [{ name: "tools_search", args: { query: "architecture_propose" } }] };
+      }
+      if (turn === 2) {
+        expect(JSON.stringify(request.tools)).toContain('"type":"integer","const":1');
+        return { calls: [{ name: "architecture_propose", args: { design } }] };
+      }
+      return { text: "Corrected numeric version and persisted the design." };
+    });
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      const config = {
+        ...(await settings(root, model.server.url.origin)),
+        provider: "openrouter" as const,
+        permission: "ask" as const,
+      };
+      harness = await createHarness(
+        root,
+        config,
+        createArchitectureService(),
+        (event) => {
+          events.push(event);
+        },
+        async (tool) => {
+          approvals.push(tool.name);
+          return true;
+        },
+        { apiKey: "local-fixture-key" },
+      );
+      const session = await harness.run(
+        "Persist the intended architecture.",
+        new AbortController().signal,
+      );
+      expect(session.status).toBe("complete");
+      expect(model.failures).toEqual([]);
+      expect(model.requests).toHaveLength(4);
+      expect(approvals).toEqual(["architecture_propose"]);
+      expect(
+        events.filter(
+          (event) => event.type === "tool-start" && event.data.name === "architecture_propose",
+        ),
+      ).toHaveLength(1);
+      expect(
+        session.messages
+          .flatMap((message) => message.toolCalls ?? [])
+          .filter((call) => call.name === "architecture_propose")
+          .map((call) => (call.arguments.design as { version: unknown }).version),
+      ).toEqual(["1", 1]);
+      expect(JSON.parse(await readFile(join(root, ".vcli/architecture.json"), "utf8"))).toEqual(
+        design,
+      );
+    } finally {
+      await harness?.close();
+      model.server.stop(true);
+      if (previousHome === undefined) delete process.env.VCLI_CONFIG_HOME;
+      else process.env.VCLI_CONFIG_HOME = previousHome;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("shows the proposed graph before a subsequent patch in the same model tool batch", async () => {
     const root = await project();
     const previousHome = process.env.VCLI_CONFIG_HOME;

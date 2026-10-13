@@ -32,6 +32,7 @@
 
 - Authorize/validate before execution wrappers. Persist starts before effects,
   results before next mutation. Parallel reads; serialize writes/shell/hooks.
+- Reject invalid tool arguments before approval/start events; never coerce types.
 - Never blindly replay uncertain mutations. Resume must inspect current state.
   Post-hook/checkpoint bookkeeping failures must not disguise successful edits.
   Cancellation drains concurrent children before closing storage.

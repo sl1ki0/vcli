@@ -68,15 +68,38 @@ export class ToolRegistry {
     context: ToolContext,
     around: (execute: () => Promise<ToolResult>) => Promise<ToolResult>,
   ): Promise<ToolResult> {
+    const tool = this.validate(call);
+    context.signal.throwIfAborted();
+    return around(() => tool.execute(call.arguments, context));
+  }
+  /** Check provider input before asking the user or recording an execution start. */
+  validate(call: ToolCall): ToolDefinition {
     const tool = this.tools.get(call.name);
     if (!tool) throw new Error(`Unknown tool ${call.name}; discover it with tools_search.`);
     const validate = this.validators.get(call.name)!;
-    if (!validate(call.arguments))
+    if (!validate(call.arguments)) {
+      const hints = (validate.errors ?? []).slice(0, 5).flatMap((error) => {
+        if (error.keyword !== "const" && error.keyword !== "type") return [];
+        let actual: unknown = call.arguments;
+        for (const segment of error.instancePath.split("/").slice(1)) {
+          const key = segment.replace(/~1/g, "/").replace(/~0/g, "~");
+          actual =
+            actual !== null && typeof actual === "object" && Object.hasOwn(actual, key)
+              ? (actual as Record<string, unknown>)[key]
+              : undefined;
+        }
+        const expected =
+          error.keyword === "type"
+            ? String(error.params.type)
+            : `constant ${typeof error.params.allowedValue === "object" ? "(fixed value)" : JSON.stringify(error.params.allowedValue)}`;
+        const received = actual === null ? "null" : Array.isArray(actual) ? "array" : typeof actual;
+        return [`${error.instancePath || "/"}: expected ${expected}; received ${received}`];
+      });
       throw new Error(
-        `Invalid arguments for ${call.name}: ${this.ajv.errorsText(validate.errors)}`,
+        `Invalid arguments for ${call.name}: ${this.ajv.errorsText(validate.errors)}${hints.length ? "; " + hints.join("; ") : ""}. No tool was executed. Correct the arguments before retrying; use tools_search to inspect the schema. Do not repeat an unchanged invalid call.`,
       );
-    context.signal.throwIfAborted();
-    return around(() => tool.execute(call.arguments, context));
+    }
+    return tool;
   }
 }
 

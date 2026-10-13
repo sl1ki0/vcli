@@ -8,7 +8,11 @@ import { objectSchema, stringSchema } from "./schema.ts";
 
 const designSchema = objectSchema(
   {
-    version: { const: 1 },
+    version: {
+      type: "integer",
+      const: 1,
+      description: 'Schema version. Use the number 1, not the string "1".',
+    },
     components: {
       type: "array",
       items: objectSchema(
