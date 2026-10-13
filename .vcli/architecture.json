@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "components": [
+    { "id": "core", "label": "Agent core", "paths": ["packages/core/"], "dependencies": [] },
+    {
+      "id": "architecture",
+      "label": "Architecture engine",
+      "paths": ["packages/architecture/"],
+      "dependencies": ["core"]
+    },
+    {
+      "id": "providers",
+      "label": "Model providers",
+      "paths": ["packages/providers/"],
+      "dependencies": ["core"]
+    },
+    {
+      "id": "integrations",
+      "label": "Skills & MCP",
+      "paths": ["packages/integrations/"],
+      "dependencies": ["core"]
+    },
+    {
+      "id": "tui",
+      "label": "Visual workspace",
+      "paths": ["packages/tui/"],
+      "dependencies": ["core", "architecture"]
+    },
+    {
+      "id": "cli",
+      "label": "CLI assembly",
+      "paths": ["apps/cli/"],
+      "dependencies": ["core", "architecture", "providers", "integrations", "tui"]
+    },
+    {
+      "id": "support",
+      "label": "Validation & documentation",
+      "paths": [
+        "tests/",
+        "scripts/",
+        "docs/",
+        "fixtures/",
+        "*.json",
+        "*.md",
+        "*.toml",
+        "bun.lock",
+        ".gitignore",
+        ".vcli/"
+      ],
+      "dependencies": ["core", "architecture", "providers", "integrations", "tui", "cli"]
+    }
+  ],
+  "decisions": [
+    "The core has no terminal, provider SDK, or Bun-specific imports.",
+    "Observed source and intended component boundaries remain separate graphs.",
+    "One permission gate governs every executor; YOLO is the default.",
+    "Graphics, indexing, navigation and export are local operations with no model calls."
+  ]
+}

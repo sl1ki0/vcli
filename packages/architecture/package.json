@@ -1,0 +1,12 @@
+{
+  "name": "@vcli/architecture",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@vcli/core": "workspace:*",
+    "typescript": "5.9.3",
+    "elkjs": "0.12.0",
+    "@resvg/resvg-js": "2.6.2"
+  }
+}

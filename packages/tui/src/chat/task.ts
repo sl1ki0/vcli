@@ -1,0 +1,121 @@
+import { createSignal, onCleanup } from "solid-js";
+import type { ApprovalDecision, RuntimeEvent, ToolDefinition } from "@vcli/core";
+import type { WorkspaceOptions } from "../contracts.ts";
+import type { Conversation } from "./conversation.ts";
+import { presentToolRequest, type ToolRequest } from "./tool-request.ts";
+import { approvalActions } from "./approval-actions.ts";
+
+interface TaskOptions {
+  workspace: WorkspaceOptions;
+  conversation: Conversation;
+  emit(event: RuntimeEvent): Promise<void>;
+  activity(text: string): void;
+  present(): Promise<void>;
+  refresh(): Promise<void>;
+}
+export function createChatTask(options: TaskOptions) {
+  const [running, setRunning] = createSignal(false);
+  const [approval, setApproval] = createSignal<{
+    request: ToolRequest;
+    selected: number;
+    actions: typeof approvalActions;
+    finish(allow: ApprovalDecision): void;
+  }>();
+  let controller: AbortController | undefined;
+  const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>, remember = true) =>
+    new Promise<ApprovalDecision>((finish) => {
+      const actions = remember
+        ? approvalActions
+        : approvalActions.filter((action) => action.decision !== "always");
+      setApproval({
+        request: presentToolRequest(tool, args),
+        actions,
+        selected: actions.length - 1,
+        finish,
+      });
+    });
+  const requestOneTimeApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
+    requestApproval(tool, args, false).then((decision) => decision === true);
+  async function start(prompt: string) {
+    if (running() || !options.workspace.run) return;
+    controller = new AbortController();
+    const current = controller;
+    setRunning(true);
+    options.conversation.send(prompt);
+    options.activity("Message sent. Waiting for model…");
+    try {
+      await options.present();
+      const session = await options.workspace.run(
+        prompt,
+        current.signal,
+        async (event) => {
+          options.conversation.accept(event);
+          await options.emit(event);
+        },
+        requestApproval,
+      );
+      const status =
+        session.status === "aborted"
+          ? "aborted"
+          : session.status === "failed" || session.status === "budget"
+            ? "failed"
+            : "complete";
+      options.conversation.finish(session, status);
+    } catch (error) {
+      options.conversation.finish(undefined, current.signal.aborted ? "aborted" : "failed");
+      options.activity(
+        current.signal.aborted
+          ? "Task canceled."
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      );
+    } finally {
+      setRunning(false);
+      setApproval(undefined);
+      controller = undefined;
+      await options.refresh();
+    }
+  }
+  function cancel() {
+    approval()?.finish(false);
+    setApproval(undefined);
+    controller?.abort();
+    options.activity("Canceling task…");
+  }
+  function approve(allow: ApprovalDecision) {
+    approval()?.finish(allow);
+    setApproval(undefined);
+  }
+  function moveApproval(direction: number, wrap = false) {
+    setApproval((pending) => {
+      if (!pending) return;
+      const selected = pending.selected + direction;
+      return {
+        ...pending,
+        selected: wrap
+          ? (selected + pending.actions.length) % pending.actions.length
+          : Math.max(0, Math.min(pending.actions.length - 1, selected)),
+      };
+    });
+  }
+  function confirmApproval() {
+    const pending = approval();
+    if (pending) approve(pending.actions[pending.selected]!.decision);
+  }
+  onCleanup(() => {
+    approval()?.finish(false);
+    controller?.abort();
+  });
+  return {
+    running,
+    approval,
+    start,
+    cancel,
+    approve,
+    moveApproval,
+    confirmApproval,
+    requestApproval,
+    requestOneTimeApproval,
+  };
+}

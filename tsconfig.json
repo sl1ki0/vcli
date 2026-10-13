@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "types": ["bun"],
+    "paths": {
+      "@vcli/core": ["./packages/core/src/index.ts"],
+      "@vcli/architecture": ["./packages/architecture/src/index.ts"],
+      "@vcli/providers": ["./packages/providers/src/index.ts"],
+      "@vcli/integrations": ["./packages/integrations/src/index.ts"],
+      "@vcli/tui": ["./packages/tui/src/index.ts"]
+    }
+  },
+  "include": ["apps", "packages", "scripts", "tests"],
+  "exclude": ["node_modules", "dist", "fixtures"]
+}

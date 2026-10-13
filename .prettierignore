@@ -1,0 +1,8 @@
+node_modules
+dist
+**/.vcli/state/**
+**/.vcli/artifacts/**
+bun.lock
+packages/architecture/resources
+licenses
+.vcli/config.json
