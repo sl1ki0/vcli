@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 204 tests with 1,062 assertions, including chat, first-run setup
+The local suite passes 211 tests with 1,124 assertions, including chat, first-run setup
 and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
@@ -92,6 +92,14 @@ Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfull
   message selection, reasoning expansion, resizing and long session-list scrolling.
   Sending from a transcript over 100 rows reveals the prompt, while later streaming
   respects manual scrolling. Enter during a response retains the unsent draft with feedback.
+- Tool permission requests use a dedicated scrollable card with labeled arguments,
+  file text before/after, command text, and persistent allow/deny controls. The preview
+  retains arguments beyond the former 700-character cutoff. Narrow-terminal scrolling,
+  Y/N, Escape/Enter denial and cancellation are covered by renderer tests. Source and
+  packaged PTY fixtures verify that a declined edit leaves the file unchanged, an
+  accepted edit applies, and both outcomes reach the local provider. The running
+  Ghostty session remains unreviewed because Computer Use denies access to Ghostty;
+  diagnosing that agent's reported blocker still requires a screenshot or transcript.
 - History selection commits before another task can change the active session.
   Failed preflight messages survive subsequent display reconciliation. Streaming
   text and reasoning survive a hard-killed child process; event watermarks prevent

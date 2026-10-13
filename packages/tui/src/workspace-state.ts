@@ -1,4 +1,5 @@
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/solid";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { LayoutScene } from "@vcli/architecture";
 import { diffGraph, type ArchitectureGraph, type RuntimeEvent, type Session } from "@vcli/core";
@@ -26,6 +27,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   const [touched, setTouched] = createSignal<Set<string>>(new Set());
   const conversation = createConversation(props.initialSession);
   let refreshBusy = false;
+  let approvalScroll: ScrollBoxRenderable | undefined;
   const narrow = createMemo(() => dimensions().width < 110);
   const task = createChatTask({
     workspace: props,
@@ -215,7 +217,23 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     }
     if (task.approval()) {
       key.preventDefault();
-      if (key.name === "y" || key.name === "n") task.approve(key.name === "y");
+      key.stopPropagation();
+      if (
+        !key.ctrl &&
+        !key.meta &&
+        !key.super &&
+        !key.hyper &&
+        (key.name === "y" || key.name === "n")
+      )
+        task.approve(key.name === "y");
+      if (key.name === "escape" || key.name === "return") task.approve(false);
+      if (key.name === "up" || key.name === "down")
+        approvalScroll?.scrollBy(key.name === "up" ? -1 : 1);
+      if (key.name === "pageup" || key.name === "pagedown")
+        approvalScroll?.scrollBy(key.name === "pageup" ? -1 : 1, "viewport");
+      if (key.name === "home") approvalScroll?.scrollTo(0);
+      if (key.name === "end" && approvalScroll)
+        approvalScroll.scrollTo(approvalScroll.scrollHeight);
       return;
     }
     if (commands.handleKey(key) || focus.handleKey(key)) return;
@@ -251,6 +269,10 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     },
     running: task.running,
     approval: task.approval,
+    approve: task.approve,
+    setApprovalScroll: (scroll: ScrollBoxRenderable) => {
+      approvalScroll = scroll;
+    },
     visibleNodes: navigation.visibleNodes,
     selected: navigation.selected,
     setSelected: navigation.setSelected,

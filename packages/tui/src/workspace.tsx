@@ -3,6 +3,7 @@ import { useWorkspaceState } from "./workspace-state.ts";
 import { WorkspacePanels } from "./workspace-panels.tsx";
 import { ArchitectureView } from "./architecture-view.tsx";
 import { ChatTranscript } from "./chat/transcript.tsx";
+import { ToolApproval } from "./chat/tool-approval.tsx";
 import type { WorkspaceOptions } from "./contracts.ts";
 export type { WorkspaceOptions } from "./contracts.ts";
 
@@ -62,33 +63,52 @@ export function Workspace(props: WorkspaceOptions) {
       </box>
       <box height={state.bodyHeight()} flexShrink={0} flexDirection="column">
         <Show
-          when={state.commands.panel()}
+          when={state.approval()}
           fallback={
             <>
-              <Show when={state.layout() !== "chat"}>
-                <ArchitectureView state={state} root={props.root} />
-              </Show>
-              <Show when={state.layout() !== "architecture"}>
-                <box height={state.chatHeight()} flexShrink={0}>
-                  <ChatTranscript
-                    conversation={state.conversation}
-                    focused={state.chatFocus()}
-                    running={state.running()}
-                    onFocus={state.focusChat}
-                    onScrollRef={state.setChatScroll}
-                  />
-                </box>
+              <Show
+                when={state.commands.panel()}
+                fallback={
+                  <>
+                    <Show when={state.layout() !== "chat"}>
+                      <ArchitectureView state={state} root={props.root} />
+                    </Show>
+                    <Show when={state.layout() !== "architecture"}>
+                      <box height={state.chatHeight()} flexShrink={0}>
+                        <ChatTranscript
+                          conversation={state.conversation}
+                          focused={state.chatFocus()}
+                          running={state.running()}
+                          onFocus={state.focusChat}
+                          onScrollRef={state.setChatScroll}
+                        />
+                      </box>
+                    </Show>
+                  </>
+                }
+              >
+                <WorkspacePanels
+                  commands={state.commands}
+                  root={props.root}
+                  running={state.running()}
+                />
               </Show>
             </>
           }
         >
-          <WorkspacePanels commands={state.commands} root={props.root} running={state.running()} />
+          {(approval) => (
+            <ToolApproval
+              request={approval().request}
+              onDecision={state.approve}
+              onScrollRef={state.setApprovalScroll}
+            />
+          )}
         </Show>
       </box>
       <box height={2} flexShrink={0} paddingLeft={1} flexDirection="column">
         <text fg={state.approval() ? "#fbbf24" : "#8e9ba9"}>
           {state.approval()
-            ? `Approve? [y/n] ${state.approval()!.label}`
+            ? "Waiting for your permission · review the action above"
             : state.activity().slice(-500)}
         </text>
       </box>

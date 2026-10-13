@@ -13,6 +13,7 @@ import {
   type ArchitectureService,
   type Session,
   type RuntimeEvent,
+  type ToolDefinition,
 } from "@vcli/core";
 import { Workspace } from "../src/workspace.tsx";
 import type {
@@ -22,6 +23,7 @@ import type {
 } from "../src/contracts.ts";
 import { createConversation, sessionMessages } from "../src/chat/conversation.ts";
 import { normalizeChatMarkdown } from "../src/chat/markdown.ts";
+import { presentToolRequest } from "../src/chat/tool-request.ts";
 
 const graph: ArchitectureGraph = {
   root: "/sample",
@@ -113,6 +115,90 @@ async function highlighted(setup: Setup) {
 }
 
 describe("conversation workspace", () => {
+  test.each(["y", "n", "escape", "return"])(
+    "tool approval presents an actionable file change and handles %s",
+    async (key) => {
+      let allowed: boolean | undefined;
+      const setup = await render({
+        run: async (_prompt, _signal, _emit, approve) => {
+          allowed = await approve(
+            {
+              name: "files_patch",
+              kind: "write",
+              description: "Replace an exact source span.",
+              inputSchema: {},
+              execute: async () => ({ text: "unused" }),
+            },
+            { path: "app.ts", oldText: "value = 1", newText: "value = 2" },
+          );
+          return session;
+        },
+      });
+      try {
+        await submit(setup, "Change the value");
+        await setup.waitForFrame((frame) => frame.includes("Permission needed"));
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain("Review file change");
+        expect(frame).toContain("File or directory");
+        expect(frame).toContain("app.ts");
+        expect(frame).toContain("Before · exact text to replace");
+        expect(frame).toContain("value = 1");
+        expect(frame).toContain("After · replacement text");
+        expect(frame).toContain("value = 2");
+        expect(frame).toContain("[Y] Allow once");
+        expect(frame).toContain("[N / Esc] Deny");
+        expect(frame).not.toContain('"newText":');
+        expect(allowed).toBeUndefined();
+        if (key === "escape") setup.mockInput.pressEscape();
+        else if (key === "return") setup.mockInput.pressEnter();
+        else setup.mockInput.pressKey(key);
+        await setup.waitForFrame((frame) => !frame.includes("Permission needed"));
+        expect(allowed).toBe(key === "y");
+        expect(input(setup).value).toBe("");
+      } finally {
+        setup.renderer.destroy();
+      }
+    },
+  );
+  test("long command approvals scroll in a narrow terminal and cancel without permission", async () => {
+    let allowed: boolean | undefined;
+    const setup = await render({
+      run: async (_prompt, _signal, _emit, approve) => {
+        allowed = await approve(
+          {
+            name: "shell_run",
+            kind: "execute",
+            description: "Run a command.",
+            inputSchema: {},
+            execute: async () => ({ text: "unused" }),
+          },
+          {
+            command: Array.from({ length: 60 }, (_, index) => `echo command-line-${index}`).join(
+              "\n",
+            ),
+          },
+        );
+        return session;
+      },
+    });
+    try {
+      setup.resize(65, 22);
+      await setup.flush();
+      await submit(setup, "Run the command");
+      await setup.waitForFrame((frame) => frame.includes("Permission needed"));
+      expect(setup.captureCharFrame()).toContain("Review command");
+      expect(setup.captureCharFrame()).toContain("[Y] Allow once");
+      expect(setup.captureCharFrame()).not.toContain("command-line-59");
+      setup.mockInput.pressKey("END");
+      await setup.waitForFrame((frame) => frame.includes("command-line-59"));
+      expect(allowed).toBeUndefined();
+      setup.mockInput.pressCtrlC();
+      await setup.waitForFrame((frame) => !frame.includes("Permission needed"));
+      expect(allowed).toBe(false);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
   test("sending from scrolled-up history reveals the prompt and later streaming respects manual scrolling", async () => {
     let release!: () => void, finish!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -648,4 +734,25 @@ test("spaced bold is normalized only outside escaped markers and literal code", 
   ).toBe(
     "**Text** `** literal **`\n```ts\n** literal **\n```\n\\** escaped **\n    ** indented **",
   );
+});
+
+test("tool requests retain long arguments, readable nested fields and visible control characters", () => {
+  const tool: ToolDefinition = {
+    name: "mcp.custom",
+    kind: "write",
+    description: "Update a remote record.",
+    inputSchema: {},
+    execute: async () => ({ text: "unused" }),
+  };
+  const request = presentToolRequest(tool, {
+    record: { title: "hello\u001b[31m", options: [true, false] },
+    content: "full-content\n".repeat(100),
+  });
+  expect(request.title).toBe("Review tool request");
+  expect(request.fields[1]?.text).toBe("title: hello\\u001b[31m\noptions: • Yes\n  • No");
+  expect(request.fields[2]?.text).toHaveLength(1300);
+  expect(
+    presentToolRequest({ ...tool, name: "files_patch" }, { path: "file.ts", newText: "" })
+      .fields[2],
+  ).toMatchObject({ label: "File content", text: "(empty text)", tone: "added" });
 });

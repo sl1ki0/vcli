@@ -2,6 +2,7 @@ import { createSignal, onCleanup } from "solid-js";
 import type { RuntimeEvent, ToolDefinition } from "@vcli/core";
 import type { WorkspaceOptions } from "../contracts.ts";
 import type { Conversation } from "./conversation.ts";
+import { presentToolRequest, type ToolRequest } from "./tool-request.ts";
 
 interface TaskOptions {
   workspace: WorkspaceOptions;
@@ -13,11 +14,14 @@ interface TaskOptions {
 }
 export function createChatTask(options: TaskOptions) {
   const [running, setRunning] = createSignal(false);
-  const [approval, setApproval] = createSignal<{ label: string; finish(allow: boolean): void }>();
+  const [approval, setApproval] = createSignal<{
+    request: ToolRequest;
+    finish(allow: boolean): void;
+  }>();
   let controller: AbortController | undefined;
   const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
     new Promise<boolean>((finish) => {
-      setApproval({ label: `${tool.name}: ${JSON.stringify(args).slice(0, 700)}`, finish });
+      setApproval({ request: presentToolRequest(tool, args), finish });
     });
   async function start(prompt: string) {
     if (running() || !options.workspace.run) return;
