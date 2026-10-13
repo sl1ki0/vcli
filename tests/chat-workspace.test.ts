@@ -22,10 +22,12 @@ test("real terminal permission cards gate file changes and return decisions to t
   expect(
     await approvalSmoke([process.execPath, resolve(import.meta.dir, "../apps/cli/src/index.ts")]),
   ).toEqual({
-    requests: 4,
+    requests: 12,
     readableApproval: true,
     deniedEditPreserved: true,
     allowedEditApplied: true,
+    rememberedAfterRestart: true,
+    newConversationAsks: true,
   });
 }, 50_000);
 

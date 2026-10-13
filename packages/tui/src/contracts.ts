@@ -7,6 +7,7 @@ import type {
   RuntimeEvent,
   Session,
   ToolDefinition,
+  ApprovalDecision,
 } from "@vcli/core";
 
 export type WorkspaceProvider = "openai" | "anthropic" | "gemini" | "openrouter" | "compatible";
@@ -84,7 +85,7 @@ export interface WorkspaceOptions {
     prompt: string,
     signal: AbortSignal,
     emit: (event: RuntimeEvent) => void | Promise<void>,
-    approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,
+    approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<ApprovalDecision>,
   ) => Promise<Session>;
 }
 export type WorkspaceInspection =

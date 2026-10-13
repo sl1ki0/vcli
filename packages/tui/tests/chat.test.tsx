@@ -14,6 +14,7 @@ import {
   type Session,
   type RuntimeEvent,
   type ToolDefinition,
+  type ApprovalDecision,
 } from "@vcli/core";
 import { Workspace } from "../src/workspace.tsx";
 import type {
@@ -115,10 +116,10 @@ async function highlighted(setup: Setup) {
 }
 
 describe("conversation workspace", () => {
-  test.each(["y", "n", "escape", "return"])(
+  test.each(["allow", "always", "deny", "escape", "return", "tab", "letters"])(
     "tool approval presents an actionable file change and handles %s",
     async (key) => {
-      let allowed: boolean | undefined;
+      let allowed: ApprovalDecision | undefined;
       const setup = await render({
         run: async (_prompt, _signal, _emit, approve) => {
           allowed = await approve(
@@ -145,15 +146,40 @@ describe("conversation workspace", () => {
         expect(frame).toContain("value = 1");
         expect(frame).toContain("After · replacement text");
         expect(frame).toContain("value = 2");
-        expect(frame).toContain("[Y] Allow once");
-        expect(frame).toContain("[N / Esc] Deny");
+        expect(frame).toContain("Allow once");
+        expect(frame).toContain("Always allow this tool for this conversation");
+        expect(frame).toContain("› Deny");
         expect(frame).not.toContain('"newText":');
         expect(allowed).toBeUndefined();
+        if (["allow", "deny", "escape"].includes(key)) {
+          setup.mockInput.pressArrow("up");
+          setup.mockInput.pressArrow("up");
+          await setup.flush();
+          expect(setup.captureCharFrame()).toContain("› Allow once");
+          expect(allowed).toBeUndefined();
+        }
+        if (key === "always") {
+          setup.mockInput.pressArrow("up");
+          await setup.flush();
+          expect(setup.captureCharFrame()).toContain("› Always allow this tool");
+          expect(allowed).toBeUndefined();
+        }
+        if (key === "deny") {
+          setup.mockInput.pressArrow("down");
+          setup.mockInput.pressArrow("down");
+        }
+        if (key === "tab") setup.mockInput.pressTab();
+        if (key === "letters") {
+          setup.mockInput.pressKey("y");
+          setup.mockInput.pressKey("n");
+          await setup.flush();
+          expect(allowed).toBeUndefined();
+          expect(setup.captureCharFrame()).toContain("Permission needed");
+        }
         if (key === "escape") setup.mockInput.pressEscape();
-        else if (key === "return") setup.mockInput.pressEnter();
-        else setup.mockInput.pressKey(key);
+        else setup.mockInput.pressEnter();
         await setup.waitForFrame((frame) => !frame.includes("Permission needed"));
-        expect(allowed).toBe(key === "y");
+        expect(allowed).toBe(key === "always" ? "always" : key === "allow" || key === "tab");
         expect(input(setup).value).toBe("");
       } finally {
         setup.renderer.destroy();
@@ -161,7 +187,7 @@ describe("conversation workspace", () => {
     },
   );
   test("long command approvals scroll in a narrow terminal and cancel without permission", async () => {
-    let allowed: boolean | undefined;
+    let allowed: ApprovalDecision | undefined;
     const setup = await render({
       run: async (_prompt, _signal, _emit, approve) => {
         allowed = await approve(
@@ -187,7 +213,7 @@ describe("conversation workspace", () => {
       await submit(setup, "Run the command");
       await setup.waitForFrame((frame) => frame.includes("Permission needed"));
       expect(setup.captureCharFrame()).toContain("Review command");
-      expect(setup.captureCharFrame()).toContain("[Y] Allow once");
+      expect(setup.captureCharFrame()).toContain("Allow once");
       expect(setup.captureCharFrame()).not.toContain("command-line-59");
       setup.mockInput.pressKey("END");
       await setup.waitForFrame((frame) => frame.includes("command-line-59"));
@@ -195,6 +221,38 @@ describe("conversation workspace", () => {
       setup.mockInput.pressCtrlC();
       await setup.waitForFrame((frame) => !frame.includes("Permission needed"));
       expect(allowed).toBe(false);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+  test("each sequential approval resets the selected action", async () => {
+    const decisions: ApprovalDecision[] = [];
+    const setup = await render({
+      run: async (_prompt, _signal, _emit, approve) => {
+        const tool: ToolDefinition = {
+          name: "shell_run",
+          kind: "execute",
+          description: "Run a command.",
+          inputSchema: {},
+          execute: async () => ({ text: "unused" }),
+        };
+        decisions.push(await approve(tool, { command: "first-command" }));
+        decisions.push(await approve(tool, { command: "second-command" }));
+        return session;
+      },
+    });
+    try {
+      await submit(setup, "Run two commands");
+      await setup.waitForFrame((frame) => frame.includes("first-command"));
+      setup.mockInput.pressArrow("up");
+      setup.mockInput.pressArrow("up");
+      setup.mockInput.pressEnter();
+      await setup.waitForFrame((frame) => frame.includes("second-command"));
+      expect(setup.captureCharFrame()).toContain("› Deny");
+      expect(decisions).toEqual([true]);
+      setup.mockInput.pressEnter();
+      await setup.waitForFrame((frame) => !frame.includes("Permission needed"));
+      expect(decisions).toEqual([true, false]);
     } finally {
       setup.renderer.destroy();
     }

@@ -1,6 +1,8 @@
 import Ajv, { type ErrorObject } from "ajv";
 import type {
+  ApprovalDecision,
   PermissionMode,
+  Session,
   ToolCall,
   ToolContext,
   ToolDefinition,
@@ -138,17 +140,96 @@ export class ToolRegistry {
 }
 
 export class PermissionGate {
+  private binding?: { session: Session; save: () => Promise<void> };
+  private authorization = Promise.resolve();
   constructor(
     readonly mode: PermissionMode,
     private readonly approve?: (
       tool: ToolDefinition,
       args: Record<string, unknown>,
-    ) => Promise<boolean>,
+    ) => Promise<ApprovalDecision>,
   ) {}
+  /** Refresh for every run; durable grants are scoped to this session and project. */
+  bindSession(session: Session, save: () => Promise<void>): void {
+    this.binding = { session, save };
+  }
   async authorize(tool: ToolDefinition, args: Record<string, unknown>): Promise<void> {
-    if (tool.kind === "read" || this.mode === "yolo") return;
+    if (tool.kind === "read") return;
+    this.checkPolicy(tool, this.binding);
+    if (this.mode === "yolo") return;
+    const binding = this.binding;
+    // A grant cannot become usable while its persistence is still in flight.
+    const result = this.authorization.then(() => this.authorizeAsk(tool, args, binding));
+    this.authorization = result.catch(() => {});
+    return result;
+  }
+  private checkPolicy(tool: ToolDefinition, binding: typeof this.binding): void {
     if (this.mode === "read-only") throw new Error(`Read-only mode denies ${tool.name}.`);
-    if (!this.approve || !(await this.approve(tool, args)))
+    if (binding?.session.mode === "plan")
+      throw new Error(`Plan mode denies ${tool.name}. Switch to build mode to implement.`);
+  }
+  private async authorizeAsk(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    binding: typeof this.binding,
+  ): Promise<void> {
+    if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
+    this.checkPolicy(tool, binding);
+    const contract = () =>
+      JSON.stringify({
+        name: tool.name,
+        kind: tool.kind,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      });
+    const schema = contract();
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(schema)),
+    );
+    if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
+    this.checkPolicy(tool, binding);
+    const schemaDigest = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const grant = binding && {
+      sessionId: binding.session.id,
+      root: binding.session.root,
+      name: tool.name,
+      kind: tool.kind,
+      schemaDigest,
+    };
+    if (
+      grant &&
+      binding.session.toolApprovals?.some(
+        (saved) =>
+          saved.sessionId === grant.sessionId &&
+          saved.root === grant.root &&
+          saved.name === grant.name &&
+          saved.kind === grant.kind &&
+          saved.schemaDigest === grant.schemaDigest,
+      )
+    )
+      return;
+    const decision = await this.approve?.(tool, args);
+    if (decision !== true && decision !== "always")
       throw new Error(`Approval denied for ${tool.name}.`);
+    if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
+    this.checkPolicy(tool, binding);
+    if (contract() !== schema)
+      throw new Error(`Tool contract changed for ${tool.name}. Request approval again.`);
+    if (decision === true) return;
+    // Standalone gates cannot turn a conversation choice into a process-wide grant.
+    if (!binding || !grant)
+      throw new Error(`Cannot remember approval for ${tool.name} without a bound conversation.`);
+    const previous = binding.session.toolApprovals;
+    binding.session.toolApprovals = [...(previous ?? []), grant];
+    try {
+      await binding.save();
+    } catch (error) {
+      binding.session.toolApprovals = previous;
+      throw new Error(`Could not save approval for ${tool.name}; no tool was executed.`, {
+        cause: error,
+      });
+    }
+    if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
+    this.checkPolicy(tool, binding);
   }
 }

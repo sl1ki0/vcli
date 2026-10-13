@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 248 tests with 1,359 assertions, including chat, first-run setup
+The local suite passes 260 tests with 1,474 assertions, including chat, first-run setup
 and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
@@ -95,9 +95,14 @@ Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfull
 - Tool permission requests use a dedicated scrollable card with labeled arguments,
   file text before/after, command text, and persistent allow/deny controls. The preview
   retains arguments beyond the former 700-character cutoff. Narrow-terminal scrolling,
-  Y/N, Escape/Enter denial and cancellation are covered by renderer tests. Source and
+  arrow/Tab selection, Enter confirmation, Escape denial, selection reset and
+  cancellation are covered by renderer tests. Y/N no longer executes an action. Source and
   packaged PTY fixtures verify that a declined edit leaves the file unchanged, an
-  accepted edit applies, and both outcomes reach the local provider.
+  accepted edit applies, and both outcomes reach the local provider. The same fixture
+  selects always-allow, repeats the tool without another prompt, restarts and restores
+  the conversation, then verifies that a new conversation asks again. Core tests cover
+  contract/project/session scoping, persistence failure rollback, concurrent authorization
+  and plan/read-only precedence; remembered grants stay outside provider context.
 - Architecture tool schemas explicitly declare the version as an integer. A local
   OpenRouter SDK fixture preserves string/number argument types, returns a precise
   validation error for a string, rediscovers the schema, and persists the corrected

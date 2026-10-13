@@ -111,7 +111,7 @@ const tasks: Task[] = [
       {
         path: "packages/core/src",
         query:
-          "class PermissionGate|async authorize|this.mode ===|Read-only mode denies|Approval denied",
+          "class PermissionGate|async authorize|this.mode ===|Read-only mode denies|Approval denied|await binding.save",
       },
     ],
     checks: [
@@ -122,9 +122,14 @@ const tasks: Task[] = [
         needle: "permission must be yolo, ask, or read-only",
       },
       {
-        label: "Read and YOLO bypass approvals",
+        label: "Read tools bypass approvals",
         path: "packages/core/src/tools.ts",
-        needle: 'tool.kind === "read" || this.mode === "yolo"',
+        needle: 'if (tool.kind === "read") return;',
+      },
+      {
+        label: "YOLO bypasses approvals after policy validation",
+        path: "packages/core/src/tools.ts",
+        needle: 'if (this.mode === "yolo") return;',
       },
       {
         label: "Read-only denies mutations",
@@ -132,9 +137,14 @@ const tasks: Task[] = [
         needle: "Read-only mode denies",
       },
       {
-        label: "Ask requires approval callback",
+        label: "Ask validates explicit approval decisions",
         path: "packages/core/src/tools.ts",
-        needle: "await this.approve(tool, args)",
+        needle: 'if (decision !== true && decision !== "always")',
+      },
+      {
+        label: "Remembered approvals persist before execution",
+        path: "packages/core/src/tools.ts",
+        needle: "await binding.save();",
       },
     ],
   },

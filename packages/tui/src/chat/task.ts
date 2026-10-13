@@ -1,8 +1,9 @@
 import { createSignal, onCleanup } from "solid-js";
-import type { RuntimeEvent, ToolDefinition } from "@vcli/core";
+import type { ApprovalDecision, RuntimeEvent, ToolDefinition } from "@vcli/core";
 import type { WorkspaceOptions } from "../contracts.ts";
 import type { Conversation } from "./conversation.ts";
 import { presentToolRequest, type ToolRequest } from "./tool-request.ts";
+import { approvalActions } from "./approval-actions.ts";
 
 interface TaskOptions {
   workspace: WorkspaceOptions;
@@ -16,13 +17,25 @@ export function createChatTask(options: TaskOptions) {
   const [running, setRunning] = createSignal(false);
   const [approval, setApproval] = createSignal<{
     request: ToolRequest;
-    finish(allow: boolean): void;
+    selected: number;
+    actions: typeof approvalActions;
+    finish(allow: ApprovalDecision): void;
   }>();
   let controller: AbortController | undefined;
-  const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
-    new Promise<boolean>((finish) => {
-      setApproval({ request: presentToolRequest(tool, args), finish });
+  const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>, remember = true) =>
+    new Promise<ApprovalDecision>((finish) => {
+      const actions = remember
+        ? approvalActions
+        : approvalActions.filter((action) => action.decision !== "always");
+      setApproval({
+        request: presentToolRequest(tool, args),
+        actions,
+        selected: actions.length - 1,
+        finish,
+      });
     });
+  const requestOneTimeApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
+    requestApproval(tool, args, false).then((decision) => decision === true);
   async function start(prompt: string) {
     if (running() || !options.workspace.run) return;
     controller = new AbortController();
@@ -70,13 +83,39 @@ export function createChatTask(options: TaskOptions) {
     controller?.abort();
     options.activity("Canceling task…");
   }
-  function approve(allow: boolean) {
+  function approve(allow: ApprovalDecision) {
     approval()?.finish(allow);
     setApproval(undefined);
+  }
+  function moveApproval(direction: number, wrap = false) {
+    setApproval((pending) => {
+      if (!pending) return;
+      const selected = pending.selected + direction;
+      return {
+        ...pending,
+        selected: wrap
+          ? (selected + pending.actions.length) % pending.actions.length
+          : Math.max(0, Math.min(pending.actions.length - 1, selected)),
+      };
+    });
+  }
+  function confirmApproval() {
+    const pending = approval();
+    if (pending) approve(pending.actions[pending.selected]!.decision);
   }
   onCleanup(() => {
     approval()?.finish(false);
     controller?.abort();
   });
-  return { running, approval, start, cancel, approve, requestApproval };
+  return {
+    running,
+    approval,
+    start,
+    cancel,
+    approve,
+    moveApproval,
+    confirmApproval,
+    requestApproval,
+    requestOneTimeApproval,
+  };
 }

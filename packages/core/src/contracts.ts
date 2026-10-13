@@ -125,6 +125,7 @@ export interface ToolDefinition extends ToolSchema {
   eager?: boolean;
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }
+export type ApprovalDecision = boolean | "always";
 export interface TaskLedger {
   goal: string;
   constraints: string[];
@@ -153,6 +154,14 @@ export interface Session {
   /** Refreshed local instructions; counted within the active prompt budget. */
   instructions?: string;
   mode?: "build" | "plan";
+  /** Conversation-scoped grants; schema digests contain no supplied argument values. */
+  toolApprovals?: {
+    sessionId: string;
+    root: string;
+    name: string;
+    kind: ToolKind;
+    schemaDigest: string;
+  }[];
   /** Durable invalid-argument retry counts for the current human task. */
   invalidToolRequests?: {
     failures: { tool: string; signature: string; attempts: number }[];

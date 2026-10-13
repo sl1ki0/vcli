@@ -99,6 +99,8 @@ export function Workspace(props: WorkspaceOptions) {
           {(approval) => (
             <ToolApproval
               request={approval().request}
+              selected={approval().selected}
+              actions={approval().actions}
               onDecision={state.approve}
               onScrollRef={state.setApprovalScroll}
             />

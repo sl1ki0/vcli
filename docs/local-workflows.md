@@ -86,6 +86,15 @@ views make no model calls. Cards use bounded previews with masked credential
 fields and literal terminal controls; full result artifacts stay separate from
 provider context. Saved sessions restore cards without replaying tool effects.
 
+In ask mode, the approval menu supports Up/Down selection and Enter confirmation:
+allow once, always allow the named tool for this conversation, or deny. Escape
+denies; Page Up/Down scrolls the request. The selected action resets to deny for
+each new request. Remembered permission is saved before execution and matches the
+conversation, project and tool contract; restarting or resuming that conversation
+retains it, while new conversations and changed contracts ask again. Plan/read-only
+policy still takes precedence. Local commands outside an agent conversation, such
+as manual checkpoint restore, offer one-time allow/deny only.
+
 The runtime stops after three requests with the same argument-validation problem
 for one tool, even if unrelated argument fields change. Valid arguments clear that
 tool's prior failures; permission refusals, command failures and hook failures

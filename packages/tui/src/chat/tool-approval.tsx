@@ -1,10 +1,14 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
+import type { ApprovalDecision } from "@vcli/core";
 import { For } from "solid-js";
 import type { ToolRequest } from "./tool-request.ts";
+import { approvalActions } from "./approval-actions.ts";
 
 export function ToolApproval(props: {
   request: ToolRequest;
-  onDecision(allow: boolean): void;
+  selected: number;
+  actions: typeof approvalActions;
+  onDecision(allow: ApprovalDecision): void;
   onScrollRef(value: ScrollBoxRenderable): void;
 }) {
   return (
@@ -45,16 +49,20 @@ export function ToolApproval(props: {
           )}
         </For>
       </scrollbox>
-      <box flexDirection="row" gap={3} flexShrink={0}>
-        <text fg="#6ee7c2" onMouseDown={() => props.onDecision(true)}>
-          [Y] Allow once
-        </text>
-        <text fg="#fca5a5" onMouseDown={() => props.onDecision(false)}>
-          [N / Esc] Deny
-        </text>
+      <box flexDirection="column" flexShrink={0}>
+        <For each={props.actions}>
+          {(action, index) => (
+            <text
+              id={`approval-action-${index()}`}
+              fg={props.selected === index() ? "#111821" : action.color}
+              bg={props.selected === index() ? action.color : undefined}
+              onMouseDown={() => props.onDecision(action.decision)}
+            >{`${props.selected === index() ? "›" : " "} ${action.label}`}</text>
+          )}
+        </For>
       </box>
       <text fg="#94a3b8" flexShrink={0}>
-        ↑/↓ · PgUp/PgDn scroll · Enter denies
+        ↑/↓ select · Enter confirm · Esc deny · PgUp/PgDn scroll
       </text>
     </box>
   );

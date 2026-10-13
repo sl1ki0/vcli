@@ -7,6 +7,7 @@ import {
   type RuntimeEvent,
   type Session,
   type ToolDefinition,
+  type ApprovalDecision,
 } from "@vcli/core";
 import { createProvider } from "@vcli/providers";
 import { discoverSkills, loadSkill, McpManager, PluginManager } from "@vcli/integrations";
@@ -27,7 +28,7 @@ export async function createHarness(
   config: Config,
   architecture: ArchitectureService,
   emit?: (event: RuntimeEvent) => void | Promise<void>,
-  approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,
+  approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<ApprovalDecision>,
   options: HarnessOptions = {},
 ) {
   if (!config.model)

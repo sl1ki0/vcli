@@ -57,7 +57,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     workspace: props,
     graph,
     running: task.running,
-    approve: task.requestApproval,
+    approve: task.requestOneTimeApproval,
     activity: setActivity,
     refresh: () => refresh(),
     changeView: async (next) => {
@@ -218,17 +218,12 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     if (task.approval()) {
       key.preventDefault();
       key.stopPropagation();
-      if (
-        !key.ctrl &&
-        !key.meta &&
-        !key.super &&
-        !key.hyper &&
-        (key.name === "y" || key.name === "n")
-      )
-        task.approve(key.name === "y");
-      if (key.name === "escape" || key.name === "return") task.approve(false);
-      if (key.name === "up" || key.name === "down")
-        approvalScroll?.scrollBy(key.name === "up" ? -1 : 1);
+      if (key.name === "escape") task.approve(false);
+      if (key.name === "return") task.confirmApproval();
+      if (!key.ctrl && !key.meta && !key.super && !key.hyper) {
+        if (key.name === "up" || key.name === "down") task.moveApproval(key.name === "up" ? -1 : 1);
+        if (key.name === "tab") task.moveApproval(key.shift ? -1 : 1, true);
+      }
       if (key.name === "pageup" || key.name === "pagedown")
         approvalScroll?.scrollBy(key.name === "pageup" ? -1 : 1, "viewport");
       if (key.name === "home") approvalScroll?.scrollTo(0);

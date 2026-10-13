@@ -110,6 +110,7 @@ export class AgentRuntime {
         : this.options.instructions;
     session.mode = this.options.mode ?? session.mode ?? "build";
     if (session.root !== root) throw new Error("Session belongs to a different project.");
+    this.options.permissions.bindSession(session, () => store.save(session));
     conversation(session);
     if (session.provider !== provider.id || session.model !== provider.model) {
       session.messages = session.messages.map((m) => ({ ...m, providerData: undefined }));

@@ -67,6 +67,13 @@ without approval prompts. Change `permission` to `ask` or `read-only`, or pass
 `--permission` for one run. Ask mode denies execution when no interactive approval
 channel is available. Permission controls are not a filesystem sandbox.
 
+In the workspace, approval requests show a highlighted menu: **Allow once**,
+**Always allow this tool for this conversation**, or **Deny**. Use **Up/Down** to
+choose and **Enter** to confirm; **Esc** denies. Each request starts on **Deny**.
+**Page Up/Down** scrolls the details. Remembered tool permissions survive a restart
+of that conversation; new conversations ask again. A changed tool contract also
+requires fresh approval. Plan and read-only modes continue to deny changes.
+
 ## Chat and architecture workspace
 
 The workspace opens with architecture and chat together. Select **Chat**, press

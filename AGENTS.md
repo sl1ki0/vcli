@@ -33,6 +33,8 @@
 - Authorize/validate before execution wrappers. Persist starts before effects,
   results before next mutation. Parallel reads; serialize writes/shell/hooks.
 - Reject invalid tool arguments before approval/start events; never coerce types.
+- Ask-mode menus use arrows/Enter; remembered approvals persist before effects,
+  scoped to conversation/project/tool contract. Plan/read-only always take precedence.
 - Stop after three repeated schema errors per tool; persist the guard across empty
   resumes, reset on new human input. Corrected arguments clear that tool's count.
 - Never blindly replay uncertain mutations. Resume must inspect current state.
