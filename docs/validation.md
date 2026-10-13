@@ -21,6 +21,10 @@ The [chat and history CI run](https://github.com/sl1ki0/vcli/actions/runs/382945
 passed on macOS and Linux with the 154-test suite, native builds, standalone
 formatted chat/history smoke, first-run setup, graphics, capped file limits and
 the offline benchmark. Both platform artifacts were uploaded successfully.
+The [local workflow CI run](https://github.com/sl1ki0/vcli/actions/runs/38405240570)
+passed on macOS and Linux with all 204 tests, native builds, the existing terminal
+smoke checks, and the new packaged plan/resume/build/task/checkpoint workflow.
+Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfully.
 
 ## Automated coverage
 
