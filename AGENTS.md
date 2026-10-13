@@ -91,7 +91,9 @@
 - Baseline on 2026-10-13: 204 tests / 1,062 assertions; macOS and Linux CI passed:
   https://github.com/sl1ki0/vcli/actions/runs/38405240570
   Artifacts: vcli-macOS-ARM64, vcli-Linux-X64. Reverify changes.
-- Local command-completion validation: 263 tests / 1,505 assertions on macOS.
+- Local extension compatibility validation: 289 tests / 1,679 assertions on macOS.
+  Format/catalog adapters, preinstall inspection, isolated broken plugins; vendor
+  commands/agents/hooks, npm/archive/HTTP catalogs and OAuth remain unsupported.
 - Open gaps: background/write/custom agents, nested memory/imports, more/vendor
   hooks, conversation rewind, draft preview restart restoration. Hosted/IDE/login,
   browser parity, native Windows and deeper languages deferred. Manual terminal

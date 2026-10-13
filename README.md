@@ -223,14 +223,17 @@ latency; live model completion rate and provider billing savings are not establi
 
 ## Skills, MCP and marketplaces
 
-Project skills are discovered in `.vcli/skills`, `.agents/skills`, `.claude/skills`
-and `.gemini/skills`. Portable Agent Plugins, Claude catalogs/packages, Codex
-catalogs/packages and Gemini extensions are normalized to supported skills and
-MCP servers. Vendor hooks, commands, agents and host UI features are reported as
+Project skills are discovered in `.vcli/skills`, `.agents/skills`, `.claude/skills`,
+`.gemini/skills` and `.qwen/skills`. Portable Agent Plugins, Claude catalogs/packages,
+Codex catalogs/packages, Gemini and Qwen extensions, and Qoder packages are
+normalized to supported skills and MCP servers. Vendor hooks, commands, agents and host UI features are reported as
 unsupported. Credentials and connected app accounts require separate integrations.
 
 ```sh
+vcli plugins formats
+vcli plugins inspect ./my-plugin
 vcli plugins install ./my-plugin
+vcli plugins install ./multi-host-plugin --format qwen
 vcli plugins install https://github.com/team/plugins.git --ref COMMIT_SHA --subdir plugins/design
 vcli plugins list
 vcli plugins marketplace add team https://github.com/team/catalog.git --ref COMMIT_SHA
@@ -245,7 +248,8 @@ MCP stdio programs and HTTP connections start on discovery through the permissio
 gate. Their schemas are deferred, arguments validated, and cancelled or uncertain
 calls are never retried. Supported transports are stdio and Streamable HTTP.
 Configuration, import compatibility and storage limitations are documented in
-[integrations](packages/integrations/README.md).
+[integrations](packages/integrations/README.md) and the
+[compatibility matrix](docs/extension-compatibility.md).
 
 ## Local coding workflows
 

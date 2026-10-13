@@ -4,8 +4,8 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 263 tests with 1,505 assertions, including chat, first-run setup
-and the local workflow expansion.
+The local suite passes 289 tests with 1,679 assertions, including chat, first-run setup,
+local workflows and extension compatibility.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
@@ -25,6 +25,22 @@ The [local workflow CI run](https://github.com/sl1ki0/vcli/actions/runs/38405240
 passed on macOS and Linux with all 204 tests, native builds, the existing terminal
 smoke checks, and the new packaged plan/resume/build/task/checkpoint workflow.
 Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfully.
+
+## Extension compatibility, 2026-10-13
+
+Public format/catalog adapters support skills and MCP imports from Agent Plugins,
+Claude Code, Codex, Gemini, Qwen and Qoder packages. New offline fixtures cover
+catalog Git source variants, path containment, duplicate rejection, entry manifest
+combination, explicit format selection, malformed declarations, damaged installed
+plugins and serialized snapshot reads. CLI fixtures verify metadata inspection,
+credential-free output, project skill discovery and a single MCP namespace without
+starting third-party programs or contacting paid providers.
+
+A compiled executable copied outside the checkout also passed format listing,
+Qwen inspection/installation, installed skill reload, credential-free summaries
+and damaged-plugin isolation. These checks verify the supported contract, not all
+third-party packages. See the [compatibility matrix](extension-compatibility.md)
+for remaining acquisition and host capability gaps.
 
 ## Automated coverage
 
