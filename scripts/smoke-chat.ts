@@ -110,7 +110,10 @@ export async function chatSmoke(command: string | string[]) {
 
   try {
     await terminal.waitFor("vcli");
-    await terminal.submit("/chat", "Chat");
+    await terminal.waitFor("Tab complete", terminal.write("/cha"));
+    await terminal.waitFor("/chat", terminal.write("\t"));
+    await terminal.waitFor("architecture hidden", terminal.write("\r"));
+    if (requests.length) throw new Error("Command completion made a model call");
     await terminal.submit(FIRST_PROMPT, "Waiting for model");
     if (!terminal.visible().includes(FIRST_PROMPT)) {
       throw terminal.failure("Sent message was not visible before the model responded");

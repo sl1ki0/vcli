@@ -1,6 +1,6 @@
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { LayoutScene } from "@vcli/architecture";
 import { diffGraph, type ArchitectureGraph, type RuntimeEvent, type Session } from "@vcli/core";
 import type { WorkspaceOptions } from "./contracts.ts";
@@ -10,6 +10,7 @@ import { createWorkspaceFocus } from "./workspace-focus.ts";
 import { createArchitectureCanvas } from "./architecture-canvas.ts";
 import { createConversation } from "./chat/conversation.ts";
 import { createChatTask } from "./chat/task.ts";
+import { createCommandCompletion } from "./chat/command-completion.ts";
 
 /** Assemble presentation controllers; each owns one independent interaction surface. */
 export function useWorkspaceState(props: WorkspaceOptions) {
@@ -83,6 +84,18 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       focus.returnToInput();
     },
   });
+  const completion = createCommandCompletion({
+    input: focus.inputValue,
+    enabled: () =>
+      !commands.panel() &&
+      !task.approval() &&
+      !navigation.searching() &&
+      !navigation.canvasFocus() &&
+      !focus.chatFocus(),
+    capacity: () => Math.max(0, Math.min(6, dimensions().height - 12)),
+    replace: focus.replaceInput,
+  });
+  createEffect(() => focus.setSuggestionHeight(completion.height()));
   const treeWidth = createMemo(() => (!narrow() && navigation.showTree() ? 25 : 0));
   const inspectorWidth = createMemo(() => (narrow() ? 0 : 28));
   const canvasWidth = createMemo(() =>
@@ -231,7 +244,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
         approvalScroll.scrollTo(approvalScroll.scrollHeight);
       return;
     }
-    if (commands.handleKey(key) || focus.handleKey(key)) return;
+    if (commands.handleKey(key) || completion.handleKey(key) || focus.handleKey(key)) return;
     navigation.handleKey(key);
   });
   usePaste((event) => {
@@ -245,6 +258,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   });
   return {
     commands,
+    completion,
     view,
     usage,
     graph,

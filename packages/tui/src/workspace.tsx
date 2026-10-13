@@ -4,6 +4,7 @@ import { WorkspacePanels } from "./workspace-panels.tsx";
 import { ArchitectureView } from "./architecture-view.tsx";
 import { ChatTranscript } from "./chat/transcript.tsx";
 import { ToolApproval } from "./chat/tool-approval.tsx";
+import { CommandSuggestions } from "./chat/command-suggestions.tsx";
 import type { WorkspaceOptions } from "./contracts.ts";
 export type { WorkspaceOptions } from "./contracts.ts";
 
@@ -114,6 +115,7 @@ export function Workspace(props: WorkspaceOptions) {
             : state.activity().slice(-500)}
         </text>
       </box>
+      <CommandSuggestions completion={state.completion} />
       <box height={1} flexShrink={0} paddingLeft={1}>
         <Show
           when={!state.commands.panel()}

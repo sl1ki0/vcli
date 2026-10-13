@@ -13,11 +13,14 @@ export function createWorkspaceFocus(options: FocusOptions) {
   const [layout, setLayout] = createSignal<WorkspaceLayout>("split");
   const [chatFocus, setChatFocus] = createSignal(false);
   const [inputValue, setInputValue] = createSignal("");
+  const [suggestionHeight, setSuggestionHeight] = createSignal(0);
   let inputRef: InputRenderable | undefined;
   let chatScroll: ScrollBoxRenderable | undefined;
   let recalled = -1;
   const navigation = options.navigation;
-  const bodyHeight = createMemo(() => Math.max(4, options.dimensions().height - 7));
+  const bodyHeight = createMemo(() =>
+    Math.max(4, options.dimensions().height - 7 - suggestionHeight()),
+  );
   const canvasHeight = createMemo(() =>
     layout() === "split" ? Math.max(3, Math.floor(bodyHeight() * 0.5)) : bodyHeight(),
   );
@@ -106,6 +109,12 @@ export function createWorkspaceFocus(options: FocusOptions) {
     canvasHeight,
     chatHeight,
     inputValue,
+    setSuggestionHeight,
+    replaceInput: (value: string) => {
+      setInputValue(value);
+      if (inputRef && !inputRef.isDestroyed) inputRef.value = value;
+      recalled = -1;
+    },
     setInputValue: (value: string) => {
       if (value === inputValue()) return;
       setInputValue(value);

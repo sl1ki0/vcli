@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 260 tests with 1,474 assertions, including chat, first-run setup
+The local suite passes 263 tests with 1,505 assertions, including chat, first-run setup
 and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
@@ -45,6 +45,11 @@ Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfull
   sessions and reject dependency cycles or blocked state transitions.
 - Workspace workflow commands make no model calls. Draft architecture previews
   survive post-task refresh and explicit scans without writing the design document.
+- Command suggestions filter local commands and permission/reasoning arguments.
+  Renderer tests cover selection, completion without execution, explicit submission,
+  Escape preserving drafts, reopening after edits, focus fallback and narrow resizing.
+  The source and packaged chat PTY checks complete `/cha` with Tab and execute
+  `/chat` with Enter before any provider request.
 - A real SDK connected to a local streaming HTTP fixture completes architecture
   query → design proposal → source patch → shell verification → graph update →
   SQLite resume. Proposal events precede following edits in the same tool batch.

@@ -128,6 +128,12 @@ Permission refusals and tool execution failures do not count toward this limit.
 Prompt commands: `/help`, `/open`, `/connect`, `/tokens`, `/reasoning`, `/config`,
 `/permission`, `/status`, `/chat`, `/split`, `/architecture`, `/history`, `/sessions`,
 `/new`, `/plugins`, `/skills`, `/observed`, `/intended`, `/changes`, `/scan`.
+Type `/` in the prompt to see commands with descriptions; keep typing to filter.
+Use **↑/↓** to select, **Tab** to complete, and **Esc** to hide suggestions while
+keeping your draft. **Enter** completes a partial command; press it again to run.
+Fully typed commands run immediately on Enter. `/permission` and `/reasoning`
+also suggest their supported arguments. Click a suggestion to fill the prompt.
+Tab cycles focus when no suggestions are open. Suggestions use no model calls.
 Configuration and navigation use no model calls. `/tokens` edits the
 context window, prompt/result/schema/map ceilings, response reserve and task budget.
 `/reasoning` chooses `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`

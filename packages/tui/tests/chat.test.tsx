@@ -116,6 +116,115 @@ async function highlighted(setup: Setup) {
 }
 
 describe("conversation workspace", () => {
+  test("command suggestions filter, navigate and complete without sending or changing focus", async () => {
+    let calls = 0;
+    const setup = await render({
+      run: async () => {
+        calls++;
+        return session;
+      },
+    });
+    try {
+      await setup.mockInput.typeText("/p");
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("› /plan");
+      expect(setup.captureCharFrame()).toContain("/plugins");
+      expect(setup.captureCharFrame()).not.toContain("/connect ·");
+      setup.mockInput.pressArrow("down");
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).value).toBe("/plans");
+      expect(input(setup).focused).toBe(true);
+      expect(setup.renderer.root.findDescendantById("command-suggestions")).toBeUndefined();
+      expect(calls).toBe(0);
+      setup.mockInput.pressKey("u", { ctrl: true });
+      await setup.mockInput.typeText("/cha");
+      setup.mockInput.pressEnter();
+      await setup.flush();
+      expect(input(setup).value).toBe("/chat");
+      expect(setup.captureCharFrame()).not.toContain("architecture hidden");
+      setup.mockInput.pressEnter();
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("architecture hidden");
+      expect(input(setup).value).toBe("");
+      expect(calls).toBe(0);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+  test("argument completion saves only on submit and Escape keeps the draft", async () => {
+    const updates: WorkspaceSettingsUpdate[] = [];
+    const setup = await render({
+      configure: async (update) => {
+        updates.push(update);
+        return settings;
+      },
+    });
+    try {
+      await setup.mockInput.typeText("/permission");
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).value).toBe("/permission ");
+      expect(setup.captureCharFrame()).toContain("/permission read-only");
+      setup.mockInput.pressArrow("down");
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).value).toBe("/permission ask");
+      expect(updates).toEqual([]);
+      setup.mockInput.pressEnter();
+      await setup.flush();
+      expect(updates).toEqual([{ kind: "permission", permission: "ask" }]);
+      await setup.mockInput.typeText("/reasoning hi");
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("/reasoning high");
+      setup.mockInput.pressEscape();
+      await setup.flush();
+      expect(input(setup).value).toBe("/reasoning hi");
+      expect(setup.renderer.root.findDescendantById("command-suggestions")).toBeUndefined();
+      setup.mockInput.pressKey("u", { ctrl: true });
+      await setup.mockInput.typeText("/reasoning hi");
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("/reasoning high");
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).value).toBe("/reasoning high");
+      setup.mockInput.pressEnter();
+      await setup.flush();
+      expect(updates[1]).toEqual({ kind: "reasoning", reasoning: "high" });
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+  test("suggestions scroll through all commands and fit a resized terminal", async () => {
+    const setup = await render();
+    try {
+      await setup.mockInput.typeText("/");
+      setup.mockInput.pressArrow("up");
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("› /commands");
+      setup.resize(50, 18);
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("› /commands");
+      expect(input(setup).y).toBeLessThan(17);
+      setup.mockInput.pressArrow("down");
+      await setup.flush();
+      expect(setup.captureCharFrame()).toContain("› /plan");
+      setup.resize(50, 12);
+      await setup.flush();
+      expect(setup.renderer.root.findDescendantById("command-suggestions")).toBeUndefined();
+      expect(input(setup).y).toBeLessThan(12);
+      setup.resize(120, 36);
+      setup.mockInput.pressKey("u", { ctrl: true });
+      await setup.mockInput.typeText("/not-a-command");
+      await setup.flush();
+      expect(setup.renderer.root.findDescendantById("command-suggestions")).toBeUndefined();
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).focused).toBe(false);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
   test.each(["allow", "always", "deny", "escape", "return", "tab", "letters"])(
     "tool approval presents an actionable file change and handles %s",
     async (key) => {

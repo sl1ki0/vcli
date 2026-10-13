@@ -77,6 +77,8 @@
   independent repaint, tree fallback. Keep observed/intended/change graphs separate.
 - F2 /chat, /split, F3 architecture; expose /history /new /connect /tokens
   /reasoning and workflow commands. Navigation/settings/history make no model calls.
+- Prompt slash suggestions share /help's catalog; arrows select, Tab completes,
+  Enter completes partial commands or submits exact ones; Esc preserves the draft.
 
 ## Verification and handoff
 
@@ -89,6 +91,7 @@
 - Baseline on 2026-10-13: 204 tests / 1,062 assertions; macOS and Linux CI passed:
   https://github.com/sl1ki0/vcli/actions/runs/38405240570
   Artifacts: vcli-macOS-ARM64, vcli-Linux-X64. Reverify changes.
+- Local command-completion validation: 263 tests / 1,505 assertions on macOS.
 - Open gaps: background/write/custom agents, nested memory/imports, more/vendor
   hooks, conversation rewind, draft preview restart restoration. Hosted/IDE/login,
   browser parity, native Windows and deeper languages deferred. Manual terminal
