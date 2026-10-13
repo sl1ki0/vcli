@@ -68,7 +68,13 @@ export interface WorkspaceOptions {
   settings?: WorkspaceSettings;
   configure?: (update: WorkspaceSettingsUpdate) => Promise<WorkspaceSettings>;
   openProject?: (path: string) => Promise<void>;
-  inspect?: (topic: "sessions" | "plugins" | "skills") => Promise<string>;
+  inspect?: (topic: WorkspaceInspection) => Promise<string>;
+  mode?: "build" | "plan";
+  changeMode?: (mode: "build" | "plan") => void;
+  rewind?: (
+    id: string,
+    approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,
+  ) => Promise<string>;
   initialCommand?: "/connect" | "/tokens" | "/help" | "/config" | "/open";
   sessions?: WorkspaceSessions;
   initialSession?: Session;
@@ -79,3 +85,12 @@ export interface WorkspaceOptions {
     approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,
   ) => Promise<Session>;
 }
+export type WorkspaceInspection =
+  | "sessions"
+  | "plugins"
+  | "skills"
+  | "memory"
+  | "tasks"
+  | "checkpoints"
+  | "hooks"
+  | "plan";

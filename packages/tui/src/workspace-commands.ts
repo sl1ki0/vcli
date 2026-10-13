@@ -7,14 +7,19 @@ import {
   onMount,
   type Accessor,
 } from "solid-js";
-import type { ArchitectureGraph, PermissionMode, Session } from "@vcli/core";
-import type { WorkspaceOptions, WorkspaceSettingsUpdate } from "./contracts.ts";
+import type { ArchitectureGraph, PermissionMode, Session, ToolDefinition } from "@vcli/core";
+import type {
+  WorkspaceOptions,
+  WorkspaceSettingsUpdate,
+  WorkspaceInspection,
+} from "./contracts.ts";
 import { createConnectionSetup } from "./setup/connection.ts";
 import { createBudgetSetup } from "./setup/budgets.ts";
 import type { PanelChoice, PanelInput, WorkspacePanel } from "./setup/contracts.ts";
 import { workspaceMenu } from "./setup/commands.ts";
 import { createReasoningSetup, reasoningChoices } from "./setup/reasoning.ts";
 import { createSessionHistory } from "./chat/history.ts";
+import { createWorkflowCommands } from "./workflow-commands.ts";
 export type WorkspaceLayout = "chat" | "split" | "architecture";
 
 type GraphView = "observed" | "intended" | "changes";
@@ -29,6 +34,7 @@ interface CommandOptions {
   changeLayout(layout: WorkspaceLayout): void;
   restoreSession(session: Session): void;
   clearConversation(): void;
+  approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>;
 }
 export function createWorkspaceCommands(options: CommandOptions) {
   const props = options.workspace;
@@ -64,7 +70,10 @@ export function createWorkspaceCommands(options: CommandOptions) {
     canChange,
     close: () => cancel(true),
     activity: options.activity,
-    restore: options.restoreSession,
+    restore: (session) => {
+      workflows.restoreMode(session.mode ?? "build");
+      options.restoreSession(session);
+    },
     clear: options.clearConversation,
   });
 
@@ -157,7 +166,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
       setWorking(false);
     }
   }
-  async function inspect(topic: "sessions" | "plugins" | "skills") {
+  async function inspect(topic: WorkspaceInspection) {
     open("read");
     setReadTitle(topic[0]!.toUpperCase() + topic.slice(1));
     setReadContent("Loading local records…");
@@ -171,6 +180,17 @@ export function createWorkspaceCommands(options: CommandOptions) {
       if (request === readVersion) setReadContent(String(error));
     }
   }
+  const workflows = createWorkflowCommands({
+    workspace: props,
+    canChange,
+    cancel,
+    inspect,
+    feedback,
+    activity: options.activity,
+    working: setWorking,
+    refresh: options.refresh,
+    approve: options.approve,
+  });
   async function execute(text: string): Promise<boolean> {
     const prompt = text.trim();
     if (!prompt.startsWith("/")) return false;
@@ -179,6 +199,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
       return true;
     }
     const [name, ...args] = prompt.split(/\s+/);
+    if (await workflows.execute(name!, args)) return true;
     if (name === "/help" || name === "/commands") open("help");
     else if (name === "/connect") open("connect");
     else if (name === "/tokens") open("tokens");
@@ -290,6 +311,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
   return {
     panel,
     settings,
+    mode: workflows.mode,
     ready,
     emptyProject,
     working: () => working() || history.selecting(),

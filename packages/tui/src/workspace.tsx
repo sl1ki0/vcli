@@ -16,7 +16,7 @@ export function Workspace(props: WorkspaceOptions) {
           height={1}
           wrapMode="none"
           fg="#6ee7c2"
-        >{`vcli   ${state.view().toUpperCase()}   ${(settings()?.permission ?? props.permission).toUpperCase()}   ${settings() ? `${settings()!.provider}/${settings()!.model || "no model"} · key:${settings()!.credential}` : "not connected"}   ${state.usage()}`}</text>
+        >{`vcli   ${state.commands.mode().toUpperCase()}   ${state.view().toUpperCase()}   ${(settings()?.permission ?? props.permission).toUpperCase()}   ${settings() ? `${settings()!.provider}/${settings()!.model || "no model"} · key:${settings()!.credential}` : "not connected"}   ${state.usage()}`}</text>
         <text
           height={1}
           wrapMode="none"

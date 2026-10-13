@@ -17,6 +17,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   const [graph, setGraph] = createSignal(props.graph);
   const baseline = props.graph;
   const [view, setView] = createSignal<"observed" | "intended" | "changes">("observed");
+  const [preview, setPreview] = createSignal<ArchitectureGraph>();
   const [scene, setScene] = createSignal<LayoutScene>();
   const [activity, setActivity] = createSignal("Ready. Explore the graph or describe a task.");
   const [usage, setUsage] = createSignal(
@@ -54,6 +55,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     workspace: props,
     graph,
     running: task.running,
+    approve: task.requestApproval,
     activity: setActivity,
     refresh: () => refresh(),
     changeView: async (next) => {
@@ -63,6 +65,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     close: () => renderer.destroy(),
     changeLayout: focus.changeLayout,
     restoreSession: (session) => {
+      setPreview(undefined);
       conversation.restore(session);
       setUsage(usageLabel(session.usage));
       focus.clearInput();
@@ -71,6 +74,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       void refresh();
     },
     clearConversation: () => {
+      setPreview(undefined);
       conversation.clear();
       setUsage("0 tokens");
       focus.clearInput();
@@ -108,7 +112,8 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     try {
       const observed = await props.architecture.scan(props.root);
       const design = await props.architecture.readDesign(props.root);
-      if (view() === "intended") setGraph(props.architecture.intendedGraph(props.root, design));
+      if (view() === "intended")
+        setGraph(preview() ?? props.architecture.intendedGraph(props.root, design));
       else {
         const next = view() === "changes" ? diffGraph(baseline, observed) : observed;
         if (
@@ -141,10 +146,14 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       setActivity(`${event.data.name}: ${String(event.data.result).slice(0, 500)}`);
       const paths = event.data.changedPaths as string[] | undefined;
       if (paths) setTouched((previous) => new Set([...previous, ...paths]));
-      if (event.data.name === "architecture_propose" && !event.data.isError) {
+      if (
+        ["architecture_propose", "architecture_preview"].includes(String(event.data.name)) &&
+        !event.data.isError
+      ) {
         const intended = (event.data.details as { intended?: ArchitectureGraph } | undefined)
           ?.intended;
         if (intended) {
+          setPreview(event.data.name === "architecture_preview" ? intended : undefined);
           if (focus.layout() === "chat") focus.changeLayout("split");
           setView("intended");
           setGraph(intended);
@@ -164,6 +173,8 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     if (event.type === "status")
       setActivity(`${event.data.status}${event.data.error ? ": " + event.data.error : ""}`);
     if (event.type === "compaction") setActivity("Context reduced; task ledger preserved.");
+    if (event.type === "subagent")
+      setActivity(`Subagent: ${event.data.status ?? event.data.type ?? "exploring"}`);
   }
   async function submit(prompt: string) {
     if (commands.working()) {

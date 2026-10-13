@@ -1,5 +1,5 @@
 import { createSignal, onCleanup } from "solid-js";
-import type { RuntimeEvent } from "@vcli/core";
+import type { RuntimeEvent, ToolDefinition } from "@vcli/core";
 import type { WorkspaceOptions } from "../contracts.ts";
 import type { Conversation } from "./conversation.ts";
 
@@ -15,6 +15,10 @@ export function createChatTask(options: TaskOptions) {
   const [running, setRunning] = createSignal(false);
   const [approval, setApproval] = createSignal<{ label: string; finish(allow: boolean): void }>();
   let controller: AbortController | undefined;
+  const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
+    new Promise<boolean>((finish) => {
+      setApproval({ label: `${tool.name}: ${JSON.stringify(args).slice(0, 700)}`, finish });
+    });
   async function start(prompt: string) {
     if (running() || !options.workspace.run) return;
     controller = new AbortController();
@@ -31,10 +35,7 @@ export function createChatTask(options: TaskOptions) {
           options.conversation.accept(event);
           await options.emit(event);
         },
-        (tool, args) =>
-          new Promise<boolean>((finish) => {
-            setApproval({ label: `${tool.name}: ${JSON.stringify(args).slice(0, 700)}`, finish });
-          }),
+        requestApproval,
       );
       const status =
         session.status === "aborted"
@@ -73,5 +74,5 @@ export function createChatTask(options: TaskOptions) {
     approval()?.finish(false);
     controller?.abort();
   });
-  return { running, approval, start, cancel, approve };
+  return { running, approval, start, cancel, approve, requestApproval };
 }

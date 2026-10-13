@@ -2,6 +2,16 @@ import type { PermissionMode } from "@vcli/core";
 import type { PanelChoice, WorkspacePanel } from "./contracts.ts";
 
 export const workspaceCommandList = [
+  { command: "/plan", description: "Explore and plan without editing source" },
+  { command: "/build", description: "Enable implementation under the current permission mode" },
+  { command: "/plans", description: "Read saved implementation plans" },
+  { command: "/memory", description: "Inspect loaded project instructions and memory" },
+  { command: "/tasks", description: "Inspect persistent tasks and dependencies" },
+  {
+    command: "/checkpoints",
+    description: "List recoverable file edits; /rewind <id> restores one",
+  },
+  { command: "/hooks", description: "Inspect configured tool hooks" },
   { command: "/connect", description: "Choose provider, model, endpoint and API key" },
   { command: "/open", description: "Open a project folder" },
   { command: "/tokens", description: "Edit context and task token budgets" },

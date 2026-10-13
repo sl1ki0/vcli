@@ -11,10 +11,12 @@ import { inspectWorkspace } from "./workspace-inspection.ts";
 import { createWorkspaceSettings } from "./workspace-settings.ts";
 import { credentialScope } from "./credentials.ts";
 import { createWorkspaceHistory } from "./workspace-history.ts";
+import { rewindCheckpoint } from "./workflows/inspection.ts";
 
 interface InteractiveOptions {
   overrides?: Partial<Config>;
   initialCommand?: WorkspaceOptions["initialCommand"];
+  mode?: "build" | "plan";
 }
 interface ProjectWorkspace {
   root: string;
@@ -61,6 +63,7 @@ export async function interactive(
     const current = project;
     let next: ProjectWorkspace | undefined;
     let sessionId: string | undefined;
+    let mode = options.mode ?? "build";
     const sameProvider = credential?.scope === credentialScope(current.config);
     const settings = createWorkspaceSettings(
       current.root,
@@ -77,6 +80,17 @@ export async function interactive(
       settings: await settings.snapshot(),
       configure: settings.configure,
       inspect: (topic) => inspectWorkspace(current.root, topic),
+      mode,
+      changeMode: (next) => {
+        mode = next;
+      },
+      rewind: (id, approve) =>
+        rewindCheckpoint(
+          current.root,
+          id,
+          mode === "plan" ? "read-only" : settings.currentConfig().permission,
+          approve,
+        ),
       sessions: createWorkspaceHistory(current.root, (selected) => {
         sessionId = selected;
       }),
@@ -90,7 +104,7 @@ export async function interactive(
           architecture,
           emit,
           approve,
-          settings.harnessOptions(),
+          { ...settings.harnessOptions(), mode },
         );
         try {
           const session = await harness.run(prompt, signal, sessionId);
