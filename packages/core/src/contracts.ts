@@ -144,6 +144,8 @@ export interface Session {
   messages: Message[];
   /** Human-facing conversation, independent of compacted provider context. */
   chat?: ChatMessage[];
+  /** Marks snapshots whose chat includes durable tool activity. */
+  chatToolsVersion?: 1;
   ledger: TaskLedger;
   usage: Usage;
   /** Reported usage plus conservative reservations for unmeasured requests. */
@@ -151,14 +153,29 @@ export interface Session {
   /** Refreshed local instructions; counted within the active prompt budget. */
   instructions?: string;
   mode?: "build" | "plan";
+  /** Durable invalid-argument retry counts for the current human task. */
+  invalidToolRequests?: {
+    failures: { tool: string; signature: string; attempts: number }[];
+    blocked?: { tool: string; reason: string };
+  };
 }
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   text: string;
   reasoning?: string;
   createdAt: string;
   status: "streaming" | "complete" | "failed" | "aborted";
+  tool?: ChatToolCall;
+}
+export interface ChatToolCall {
+  callId: string;
+  name: string;
+  kind?: ToolKind;
+  target?: string;
+  input: string;
+  artifact?: string;
+  state: "requested" | "running" | "complete" | "failed" | "interrupted" | "blocked";
 }
 export interface RuntimeEvent {
   type:
@@ -168,6 +185,7 @@ export interface RuntimeEvent {
     | "message-start"
     | "message-end"
     | "tool-start"
+    | "tool-request"
     | "tool-end"
     | "architecture"
     | "usage"

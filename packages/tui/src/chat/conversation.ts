@@ -1,5 +1,34 @@
 import { createMemo, createSignal } from "solid-js";
-import type { ChatMessage, RuntimeEvent, Session } from "@vcli/core";
+import {
+  applyToolConversationEvent,
+  displayToolText,
+  type ChatMessage,
+  type RuntimeEvent,
+  type Session,
+} from "@vcli/core";
+import { toolPageStride } from "./tool-text.ts";
+
+export interface ArtifactView {
+  loading: boolean;
+  content?: string;
+  error?: string;
+  page: number;
+}
+
+function interruptUnfinishedTools(messages: ChatMessage[], status: string): ChatMessage[] {
+  if (status === "complete") return messages;
+  return messages.map((message) => {
+    if (message.tool && (message.tool.state === "requested" || message.tool.state === "running"))
+      return {
+        ...message,
+        status: "aborted" as const,
+        tool: { ...message.tool, state: "interrupted" as const },
+        text:
+          message.text || "No completion was recorded. Inspect the current state before retrying.",
+      };
+    return message;
+  });
+}
 
 export function sessionMessages(session: Session): ChatMessage[] {
   if (session.chat) return session.chat;
@@ -19,7 +48,10 @@ export function sessionMessages(session: Session): ChatMessage[] {
 }
 
 /** The visible conversation survives model-context compaction and separate task turns. */
-export function createConversation(initial?: Session) {
+export function createConversation(
+  initial?: Session,
+  readArtifact?: (id: string) => Promise<string>,
+) {
   const [messages, setMessages] = createSignal<ChatMessage[]>(
     initial ? sessionMessages(initial) : [],
   );
@@ -27,11 +59,14 @@ export function createConversation(initial?: Session) {
   const [phase, setPhase] = createSignal("Ready");
   const [selected, setSelected] = createSignal<string>();
   const [expandedReasoning, setExpandedReasoning] = createSignal<Set<string>>(new Set());
+  const [expandedTools, setExpandedTools] = createSignal<Set<string>>(new Set());
+  const [artifacts, setArtifacts] = createSignal<Record<string, ArtifactView>>({});
   const [reveal, setReveal] = createSignal<string>();
   const visibleMessages = createMemo(() =>
     messages().filter(
       (message) =>
         message.role === "user" ||
+        message.role === "tool" ||
         message.text ||
         message.reasoning ||
         message.status !== "complete",
@@ -39,6 +74,7 @@ export function createConversation(initial?: Session) {
   );
   let pendingUser: string | undefined;
   let assistantId: string | undefined;
+  let artifactGeneration = 0;
   const localFailures = new Set<string>();
 
   function replace(id: string, update: Partial<ChatMessage>) {
@@ -73,6 +109,23 @@ export function createConversation(initial?: Session) {
     setPhase("Waiting for model…");
   }
   function accept(event: RuntimeEvent) {
+    if (event.type === "tool-request" || event.type === "tool-start" || event.type === "tool-end") {
+      setMessages((previous) => {
+        const next = previous.map((message) =>
+          message.role === "tool" && message.tool && message.tool.callId === event.data.callId
+            ? { ...message, tool: { ...message.tool } }
+            : message,
+        );
+        applyToolConversationEvent(next, event);
+        return next;
+      });
+      setPhase(
+        event.type === "tool-end"
+          ? "Waiting for model…"
+          : `${event.type === "tool-start" ? "Using" : "Requested"} ${String(event.data.name)}…`,
+      );
+      return;
+    }
     const id =
       typeof event.data.messageId === "string"
         ? event.data.messageId
@@ -115,10 +168,9 @@ export function createConversation(initial?: Session) {
         });
       assistantId = undefined;
     }
-    if (event.type === "tool-start") setPhase(`Using ${String(event.data.name)}…`);
-    if (event.type === "tool-end") setPhase("Waiting for model…");
   }
   function restore(next: Session) {
+    artifactGeneration++;
     setSession(next);
     setMessages(sessionMessages(next));
     pendingUser = undefined;
@@ -127,6 +179,8 @@ export function createConversation(initial?: Session) {
     setSelected(undefined);
     setReveal(undefined);
     setExpandedReasoning(new Set<string>());
+    setExpandedTools(new Set<string>());
+    setArtifacts({});
     setPhase(next.status === "aborted" ? "Interrupted · send a message to continue" : "Ready");
   }
   function finish(next?: Session, status: "complete" | "failed" | "aborted" = "complete") {
@@ -143,13 +197,13 @@ export function createConversation(initial?: Session) {
           b = Date.parse(right.createdAt);
         return Number.isFinite(a) && Number.isFinite(b) ? a - b : 0;
       });
-      setMessages(restored);
+      setMessages(interruptUnfinishedTools(restored, status));
       pendingUser = undefined;
       assistantId = undefined;
     } else {
       if (next) setSession(next);
       setMessages((previous) =>
-        previous.map((message) =>
+        interruptUnfinishedTools(previous, status).map((message) =>
           message.status === "streaming" ? { ...message, status } : message,
         ),
       );
@@ -169,11 +223,14 @@ export function createConversation(initial?: Session) {
     );
   }
   function clear() {
+    artifactGeneration++;
     setMessages([]);
     setSession(undefined);
     setSelected(undefined);
     setReveal(undefined);
     setExpandedReasoning(new Set<string>());
+    setExpandedTools(new Set<string>());
+    setArtifacts({});
     pendingUser = undefined;
     assistantId = undefined;
     localFailures.clear();
@@ -201,6 +258,52 @@ export function createConversation(initial?: Session) {
       return next;
     });
   }
+  function toggleDetails(id = selected()) {
+    if (!id) return;
+    if (messages().find((message) => message.id === id)?.role !== "tool") {
+      toggleReasoning(id);
+      return;
+    }
+    setExpandedTools((previous) => {
+      const next = new Set(previous);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+  async function openArtifact(id = selected()) {
+    if (!id || !readArtifact) return;
+    const artifact = messages().find((message) => message.id === id)?.tool?.artifact;
+    if (!artifact || artifacts()[id]?.loading || artifacts()[id]?.content !== undefined) return;
+    const generation = artifactGeneration;
+    setExpandedTools((previous) => new Set([...previous, id]));
+    setArtifacts((previous) => ({ ...previous, [id]: { loading: true, page: 0 } }));
+    try {
+      const content = displayToolText(await readArtifact(artifact));
+      if (artifactGeneration !== generation || !messages().some((message) => message.id === id))
+        return;
+      setArtifacts((previous) => ({ ...previous, [id]: { loading: false, content, page: 0 } }));
+    } catch {
+      if (artifactGeneration !== generation || !messages().some((message) => message.id === id))
+        return;
+      setArtifacts((previous) => ({
+        ...previous,
+        [id]: { loading: false, error: "Full result could not be opened. Try again.", page: 0 },
+      }));
+    }
+  }
+  function changeArtifactPage(direction: number, id = selected()) {
+    if (!id || !expandedTools().has(id)) return;
+    const view = artifacts()[id];
+    if (!view || view.content === undefined) return;
+    const page = Math.max(
+      0,
+      Math.min(
+        Math.max(0, Math.ceil(view.content.length / toolPageStride) - 1),
+        view.page + direction,
+      ),
+    );
+    setArtifacts((previous) => ({ ...previous, [id]: { ...view, page } }));
+  }
   return {
     messages,
     visibleMessages,
@@ -208,6 +311,12 @@ export function createConversation(initial?: Session) {
     phase,
     selected,
     expandedReasoning,
+    expandedTools,
+    artifacts,
+    canReadArtifact: !!readArtifact,
+    openArtifact,
+    changeArtifactPage,
+    toggleDetails,
     reveal,
     acknowledgeReveal: (request: string) => {
       if (reveal() === request) setReveal(undefined);

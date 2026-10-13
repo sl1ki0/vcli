@@ -7,6 +7,7 @@ import { resourceLimitsSmoke } from "./smoke-resource-limits.ts";
 import { chatSmoke } from "./smoke-chat.ts";
 import { workflowsSmoke } from "./smoke-workflows.ts";
 import { approvalSmoke } from "./smoke-approval.ts";
+import { toolHistorySmoke } from "./smoke-tool-history.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "vcli-packaged-"));
 const binary = join(directory, "vcli");
@@ -61,9 +62,10 @@ try {
   await chatSmoke(binary);
   await workflowsSmoke(binary);
   await approvalSmoke(binary);
+  await toolHistorySmoke(binary);
   await resourceLimitsSmoke(binary);
   console.log(
-    `Standalone smoke passed on ${process.platform}/${process.arch}: analysis, worker/font, exports, SQLite, config, plugins, PTY tree/Kitty, first-run setup, formatted chat, restored history, visual permission decisions, planning/build transitions, tasks, checkpoints, terminal cleanup and capped descriptors. No checkout dependencies.`,
+    `Standalone smoke passed on ${process.platform}/${process.arch}: analysis, worker/font, exports, SQLite, config, plugins, PTY tree/Kitty, first-run setup, formatted chat, restored tool history/artifacts, invalid-request stop, visual permission decisions, planning/build transitions, tasks, checkpoints, terminal cleanup and capped descriptors. No checkout dependencies.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

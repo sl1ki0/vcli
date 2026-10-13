@@ -33,6 +33,8 @@
 - Authorize/validate before execution wrappers. Persist starts before effects,
   results before next mutation. Parallel reads; serialize writes/shell/hooks.
 - Reject invalid tool arguments before approval/start events; never coerce types.
+- Stop after three repeated schema errors per tool; persist the guard across empty
+  resumes, reset on new human input. Corrected arguments clear that tool's count.
 - Never blindly replay uncertain mutations. Resume must inspect current state.
   Post-hook/checkpoint bookkeeping failures must not disguise successful edits.
   Cancellation drains concurrent children before closing storage.
@@ -45,6 +47,8 @@
   idempotent. Explorers share the parent budget; they do not get free extra tokens.
 - Preserve the task ledger; prune complete tool groups, never human chat history.
 - Session.chat is presentation history; Session.messages is provider context.
+  Persist tool cards/results together; bounded previews and local artifact views
+  never enter model context. Restore unfinished tools as interrupted, never replay.
   Preserve opaque signatures/continuations; clear them on provider switches.
   SQLite snapshots/event watermarks prevent duplicate stream replay.
 - Scope credentials to provider/endpoint, separate from project settings. Mask and

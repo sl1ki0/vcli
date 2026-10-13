@@ -87,6 +87,18 @@ separate task. History is stored locally, including partial responses after an
 interruption, independently of the model's context budget. Browsing and switching
 history make no model calls.
 
+Tool calls appear in the conversation as cards with the action, target and state:
+waiting, running, succeeded, failed, interrupted or blocked. Errors stay visible;
+select a card and press **Space/Enter** (or click its title) to inspect labeled
+inputs and the result preview. Press **F** to open the full saved result locally;
+**Left/Right** page through it. Cards and result handles survive restarts, and
+older saved sessions recover their tool history from the local event journal.
+
+Three repeated argument-validation errors for the same tool and schema problem
+stop the current task before another model request. Corrected arguments reset
+that tool's count. The stop survives a restart; send a new message to continue.
+Permission refusals and tool execution failures do not count toward this limit.
+
 | Key                      | Action                                    |
 | ------------------------ | ----------------------------------------- |
 | Tab                      | Cycle prompt, canvas and chat focus       |

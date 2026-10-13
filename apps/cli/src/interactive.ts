@@ -12,6 +12,7 @@ import { createWorkspaceSettings } from "./workspace-settings.ts";
 import { credentialScope } from "./credentials.ts";
 import { createWorkspaceHistory } from "./workspace-history.ts";
 import { rewindCheckpoint } from "./workflows/inspection.ts";
+import { SqliteSessionStore } from "./store.ts";
 
 interface InteractiveOptions {
   overrides?: Partial<Config>;
@@ -80,6 +81,14 @@ export async function interactive(
       settings: await settings.snapshot(),
       configure: settings.configure,
       inspect: (topic) => inspectWorkspace(current.root, topic),
+      readArtifact: async (id) => {
+        const store = await SqliteSessionStore.open(current.root);
+        try {
+          return await store.readArtifact(id);
+        } finally {
+          store.close();
+        }
+      },
       mode,
       changeMode: (next) => {
         mode = next;

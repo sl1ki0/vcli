@@ -3,6 +3,7 @@ import {
   applyConversationEvent,
   conversation,
   recoverLegacyConversation,
+  recoverToolConversation,
   type RuntimeEvent,
   type Session,
 } from "@vcli/core";
@@ -28,19 +29,35 @@ export function readSession(db: Database, id: string): Session | undefined {
   const session = JSON.parse(row.data) as Session;
   const legacy = session.chat === undefined;
   const chat = conversation(session);
-  const events = db
-    .query<{ data: string }, [string, number]>(
-      "SELECT data FROM events WHERE session_id=? AND seq>? ORDER BY seq",
+  const migrateTools = session.chatToolsVersion !== 1;
+  const storedEvents = db
+    .query<{ seq: number; data: string }, [string, number]>(
+      "SELECT seq,data FROM events WHERE session_id=? AND seq>? ORDER BY seq",
     )
-    .all(id, row.event_seq)
-    .map(({ data }) => JSON.parse(data) as RuntimeEvent);
+    .all(id, migrateTools ? 0 : row.event_seq)
+    .map(({ seq, data }) => ({ seq, event: JSON.parse(data) as RuntimeEvent }));
+  const events = storedEvents.filter(({ seq }) => seq > row.event_seq).map(({ event }) => event);
   if (legacy) recoverLegacyConversation(session, events);
   for (const event of events) applyConversationEvent(chat, event);
-  for (const message of chat)
+  // Older snapshots already contain human text, but never contained tool cards.
+  // Recover their complete tool journal, including calls before the watermark.
+  if (migrateTools)
+    recoverToolConversation(
+      session,
+      storedEvents.map(({ event }) => event),
+    );
+  for (const message of chat) {
+    if (message.tool?.state === "requested" || message.tool?.state === "running") {
+      message.tool.state = "interrupted";
+      message.status = "aborted";
+      if (session.status === "running") session.status = "aborted";
+    }
     if (message.status === "streaming") {
       message.status = "aborted";
       if (session.status === "running") session.status = "aborted";
     }
+  }
+  session.chatToolsVersion = 1;
   return session;
 }
 

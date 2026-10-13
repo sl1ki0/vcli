@@ -1,4 +1,4 @@
-import Ajv from "ajv";
+import Ajv, { type ErrorObject } from "ajv";
 import type {
   PermissionMode,
   ToolCall,
@@ -8,6 +8,36 @@ import type {
   ToolSchema,
 } from "./contracts.ts";
 import { estimateTokens } from "./context.ts";
+
+/** Schema-only fingerprint: never includes the supplied argument values. */
+function validationSignatures(errors: ErrorObject[]): string[] {
+  return [
+    ...new Set(
+      errors.map((error) =>
+        JSON.stringify({
+          path: error.instancePath,
+          schema: error.schemaPath,
+          keyword: error.keyword,
+          expected: Object.fromEntries(
+            Object.entries(error.params)
+              .filter(([key]) => key !== "additionalProperty" && key !== "propertyName")
+              .sort(([left], [right]) => left.localeCompare(right)),
+          ),
+        }),
+      ),
+    ),
+  ].sort();
+}
+
+export class ToolValidationError extends Error {
+  constructor(
+    message: string,
+    readonly signatures: string[],
+  ) {
+    super(message);
+    this.name = "ToolValidationError";
+  }
+}
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
@@ -75,7 +105,10 @@ export class ToolRegistry {
   /** Check provider input before asking the user or recording an execution start. */
   validate(call: ToolCall): ToolDefinition {
     const tool = this.tools.get(call.name);
-    if (!tool) throw new Error(`Unknown tool ${call.name}; discover it with tools_search.`);
+    if (!tool)
+      throw new ToolValidationError(`Unknown tool ${call.name}; discover it with tools_search.`, [
+        "unknown-tool",
+      ]);
     const validate = this.validators.get(call.name)!;
     if (!validate(call.arguments)) {
       const hints = (validate.errors ?? []).slice(0, 5).flatMap((error) => {
@@ -95,8 +128,9 @@ export class ToolRegistry {
         const received = actual === null ? "null" : Array.isArray(actual) ? "array" : typeof actual;
         return [`${error.instancePath || "/"}: expected ${expected}; received ${received}`];
       });
-      throw new Error(
+      throw new ToolValidationError(
         `Invalid arguments for ${call.name}: ${this.ajv.errorsText(validate.errors)}${hints.length ? "; " + hints.join("; ") : ""}. No tool was executed. Correct the arguments before retrying; use tools_search to inspect the schema. Do not repeat an unchanged invalid call.`,
+        validationSignatures(validate.errors ?? []),
       );
     }
     return tool;

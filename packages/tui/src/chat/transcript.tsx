@@ -3,6 +3,7 @@ import { useRenderer } from "@opentui/solid";
 import { Index, Show, createEffect, onCleanup } from "solid-js";
 import type { Conversation } from "./conversation.ts";
 import { createChatStyle, normalizeChatMarkdown } from "./markdown.ts";
+import { ToolActivity } from "./tool-activity.tsx";
 
 export function ChatTranscript(props: {
   conversation: Conversation;
@@ -40,7 +41,7 @@ export function ChatTranscript(props: {
         paddingLeft={1}
         onMouseDown={props.onFocus}
       >
-        {`Chat · ${props.conversation.visibleMessages().length} messages · ${props.conversation.phase()}${props.focused ? " · ↑/↓ messages · PgUp/PgDn scroll · Space reasoning" : " · click to navigate"}`}
+        {`Chat · ${props.conversation.phase()} · ${props.conversation.visibleMessages().length} messages${props.focused ? " · ↑/↓ select · PgUp/PgDn scroll · Space details · F full result" : " · click to navigate"}`}
       </text>
       <scrollbox
         id="chat-history"
@@ -81,53 +82,66 @@ export function ChatTranscript(props: {
                   props.conversation.select(message().id);
                 }}
               >
-                <text fg={message().role === "user" ? "#6ee7c2" : "#38bdf8"}>
-                  {`${props.conversation.selected() === message().id ? "› " : ""}${message().role === "user" ? "You" : "Assistant"}${message().status === "streaming" ? " · responding" : message().status === "failed" ? " · failed" : message().status === "aborted" ? " · canceled" : ""}`}
-                </text>
-                <Show when={message().reasoning}>
-                  <text
-                    fg="#94a3b8"
-                    onMouseDown={() => props.conversation.toggleReasoning(message().id)}
-                  >{`${reasoning().has(message().id) ? "▾" : "▸"} Reasoning · click to ${reasoning().has(message().id) ? "hide" : "show"}`}</text>
-                  <Show when={reasoning().has(message().id)}>
-                    <markdown
-                      content={normalizeChatMarkdown(message().reasoning ?? "")}
-                      syntaxStyle={style}
-                      conceal
-                      streaming={message().status === "streaming"}
-                      fg="#94a3b8"
-                      width="100%"
-                    />
-                  </Show>
-                </Show>
                 <Show
-                  when={message().text}
+                  when={message().role === "tool"}
                   fallback={
-                    <text fg="#8e9ba9">
-                      {message().status === "streaming"
-                        ? "Waiting for response…"
-                        : "No text response."}
-                    </text>
+                    <>
+                      <text fg={message().role === "user" ? "#6ee7c2" : "#38bdf8"}>
+                        {`${props.conversation.selected() === message().id ? "› " : ""}${message().role === "user" ? "You" : "Assistant"}${message().status === "streaming" ? " · responding" : message().status === "failed" ? " · failed" : message().status === "aborted" ? " · canceled" : ""}`}
+                      </text>
+                      <Show when={message().reasoning}>
+                        <text
+                          fg="#94a3b8"
+                          onMouseDown={() => props.conversation.toggleReasoning(message().id)}
+                        >{`${reasoning().has(message().id) ? "▾" : "▸"} Reasoning · click to ${reasoning().has(message().id) ? "hide" : "show"}`}</text>
+                        <Show when={reasoning().has(message().id)}>
+                          <markdown
+                            content={normalizeChatMarkdown(message().reasoning ?? "")}
+                            syntaxStyle={style}
+                            conceal
+                            streaming={message().status === "streaming"}
+                            fg="#94a3b8"
+                            width="100%"
+                          />
+                        </Show>
+                      </Show>
+                      <Show
+                        when={message().text}
+                        fallback={
+                          <text fg="#8e9ba9">
+                            {message().status === "streaming"
+                              ? "Waiting for response…"
+                              : "No text response."}
+                          </text>
+                        }
+                      >
+                        <Show
+                          when={message().role === "user"}
+                          fallback={
+                            <markdown
+                              id={`message-content-${message().id}`}
+                              content={normalizeChatMarkdown(message().text)}
+                              syntaxStyle={style}
+                              conceal
+                              streaming={message().status === "streaming"}
+                              width="100%"
+                              tableOptions={{
+                                style: "grid",
+                                widthMode: "content",
+                                wrapMode: "word",
+                              }}
+                            />
+                          }
+                        >
+                          <text id={`message-content-${message().id}`} fg="#dce4ed" wrapMode="word">
+                            {message().text}
+                          </text>
+                        </Show>
+                      </Show>
+                    </>
                   }
                 >
-                  <Show
-                    when={message().role === "user"}
-                    fallback={
-                      <markdown
-                        id={`message-content-${message().id}`}
-                        content={normalizeChatMarkdown(message().text)}
-                        syntaxStyle={style}
-                        conceal
-                        streaming={message().status === "streaming"}
-                        width="100%"
-                        tableOptions={{ style: "grid", widthMode: "content", wrapMode: "word" }}
-                      />
-                    }
-                  >
-                    <text id={`message-content-${message().id}`} fg="#dce4ed" wrapMode="word">
-                      {message().text}
-                    </text>
-                  </Show>
+                  <ToolActivity message={message()} conversation={props.conversation} />
                 </Show>
               </box>
             )}

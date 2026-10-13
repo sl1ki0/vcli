@@ -40,6 +40,7 @@ export class SqliteSessionStore implements SessionStore {
       updatedAt: now,
       messages: [],
       chat: [],
+      chatToolsVersion: 1,
       ledger: {
         goal,
         constraints: [],
@@ -96,6 +97,35 @@ export class SqliteSessionStore implements SessionStore {
       if (event.type === "tool-start" && event.data.kind !== "read")
         starts.set(String(event.data.callId), String(event.data.name));
       if (event.type === "tool-end") starts.delete(String(event.data.callId));
+    }
+    if (starts.size) {
+      const row = this.db
+        .query<{ data: string }, [string]>("SELECT data FROM sessions WHERE id=?")
+        .get(sessionId);
+      if (row) {
+        const snapshot = JSON.parse(row.data) as Session;
+        const recorded = new Set(
+          snapshot.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => message.toolCallId),
+        );
+        // Result snapshots include both the native result and the final card.
+        // A crash before the later journal end must not make that result uncertain.
+        // Synthetic interrupted results deliberately do not satisfy this evidence.
+        for (const message of snapshot.chat ?? []) {
+          const tool = message.tool;
+          if (
+            message.role === "tool" &&
+            tool &&
+            (tool.state === "complete" || tool.state === "failed") &&
+            typeof tool.artifact === "string" &&
+            tool.artifact.length > 0 &&
+            starts.get(tool.callId) === tool.name &&
+            recorded.has(tool.callId)
+          )
+            starts.delete(tool.callId);
+        }
+      }
     }
     return [...starts.values()];
   }

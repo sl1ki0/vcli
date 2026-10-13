@@ -69,6 +69,8 @@ export interface WorkspaceOptions {
   configure?: (update: WorkspaceSettingsUpdate) => Promise<WorkspaceSettings>;
   openProject?: (path: string) => Promise<void>;
   inspect?: (topic: WorkspaceInspection) => Promise<string>;
+  /** Local artifact inspection; never enters provider context or invokes a model. */
+  readArtifact?: (id: string) => Promise<string>;
   mode?: "build" | "plan";
   changeMode?: (mode: "build" | "plan") => void;
   rewind?: (

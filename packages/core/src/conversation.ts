@@ -1,4 +1,5 @@
 import type { ChatMessage, RuntimeEvent, Session } from "./contracts.ts";
+import { applyToolConversationEvent } from "./tool-history.ts";
 
 /** Human chat never participates in model context selection or compaction. */
 export function conversation(session: Session): ChatMessage[] {
@@ -17,7 +18,7 @@ export function conversation(session: Session): ChatMessage[] {
   ));
 }
 
-export function startMessage(session: Session, role: ChatMessage["role"], text = ""): ChatMessage {
+export function startMessage(session: Session, role: "user" | "assistant", text = ""): ChatMessage {
   const message: ChatMessage = {
     id: crypto.randomUUID(),
     role,
@@ -31,6 +32,7 @@ export function startMessage(session: Session, role: ChatMessage["role"], text =
 
 /** Replays only append-only conversation events after a persisted snapshot. */
 export function applyConversationEvent(chat: ChatMessage[], event: RuntimeEvent): void {
+  if (applyToolConversationEvent(chat, event)) return;
   const id = event.data.messageId;
   if (typeof id !== "string") return;
   let message = chat.find((item) => item.id === id);

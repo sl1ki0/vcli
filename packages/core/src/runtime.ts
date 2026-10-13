@@ -14,15 +14,19 @@ import type {
   Usage,
 } from "./contracts.ts";
 import { balanced, boundText, BudgetContextPlanner, estimateTokens } from "./context.ts";
-import { PermissionGate, ToolRegistry } from "./tools.ts";
+import { PermissionGate, ToolRegistry, ToolValidationError } from "./tools.ts";
 
 import { SourceReadCache } from "./source-read-cache.ts";
 import { conversation, startMessage } from "./conversation.ts";
 import { reserveDelegation } from "./delegation-budget.ts";
+import { applyToolConversationEvent } from "./tool-history.ts";
+import { recordInvalidToolRequest, resetInvalidToolRequests } from "./invalid-tool-requests.ts";
 
 interface ToolExecution {
   call: ToolCall;
   result: ToolResult;
+  blocked?: boolean;
+  interrupted?: boolean;
 }
 
 export interface RuntimeOptions {
@@ -60,13 +64,22 @@ export class AgentRuntime {
       this.options.store.save(session),
     );
   }
-  private async emit(type: RuntimeEvent["type"], data: Record<string, unknown>): Promise<void> {
+  private async emit(
+    type: RuntimeEvent["type"],
+    data: Record<string, unknown>,
+    options: { saveSession?: boolean } = {},
+  ): Promise<void> {
     const event: RuntimeEvent = {
       type,
       data,
       sessionId: this.session!.id,
       time: new Date().toISOString(),
     };
+    if (type === "tool-request" || type === "tool-start" || type === "tool-end") {
+      applyToolConversationEvent(conversation(this.session!), event);
+      this.session!.chatToolsVersion = 1;
+    }
+    if (options.saveSession) await this.options.store.save(this.session!);
     await this.options.store.append(event);
     await this.options.onEvent?.(event);
   }
@@ -104,6 +117,7 @@ export class AgentRuntime {
       session.model = provider.model;
     }
     session.status = "running";
+    if (prompt) session.invalidToolRequests = undefined;
     const user = prompt ? startMessage(session, "user", prompt) : undefined;
     if (prompt) session.messages.push({ role: "user", text: prompt });
     await store.save(session);
@@ -119,6 +133,16 @@ export class AgentRuntime {
         text: user.text,
         createdAt: user.createdAt,
       });
+    if (session.invalidToolRequests?.blocked) {
+      session.status = "failed";
+      await this.recoverInterruptedCalls(session);
+      await store.save(session);
+      await this.emit("status", {
+        status: session.status,
+        error: session.invalidToolRequests.blocked.reason,
+      });
+      return session;
+    }
     let graph: ArchitectureGraph;
     try {
       graph = await architecture.scan(root);
@@ -142,19 +166,34 @@ export class AgentRuntime {
           graph = await architecture.scan(root);
           await this.emit("architecture", { graph, revision: graph.revision });
         }
+        if (session.invalidToolRequests?.blocked) {
+          session.status = "failed";
+          break;
+        }
         if (turn === this.settings.maxTurns - 1) session.status = "budget";
       }
     } catch (error) {
       session.status = signal.aborted ? "aborted" : "failed";
+      for (const message of conversation(session))
+        if (message.tool?.state === "requested" || message.tool?.state === "running") {
+          message.tool.state = "interrupted";
+          message.status = session.status;
+          message.text = "No completion was recorded. Inspect current state before retrying.";
+        }
+      await store.save(session);
       await this.emit("status", {
         status: session.status,
         error: error instanceof Error ? error.message : String(error),
       });
-      await store.save(session);
       if (!signal.aborted) throw error;
     }
     await store.save(session);
-    await this.emit("status", { status: session.status });
+    await this.emit("status", {
+      status: session.status,
+      ...(session.invalidToolRequests?.blocked
+        ? { error: session.invalidToolRequests.blocked.reason }
+        : {}),
+    });
     return session;
   }
 
@@ -171,13 +210,17 @@ export class AgentRuntime {
     );
     for (const m of [...session.messages])
       for (const call of m.toolCalls ?? [])
-        if (!completed.has(call.id))
-          session.messages.push({
-            role: "tool",
-            toolCallId: call.id,
-            toolName: call.name,
-            text: "Interrupted before a recorded result. Outcome uncertain; inspect current state. Do not replay automatically.",
+        if (!completed.has(call.id)) {
+          await this.recordToolResult(session, {
+            call,
+            result: {
+              text: "Interrupted before a recorded result. Outcome uncertain; inspect current state. Do not replay automatically.",
+              isError: true,
+            },
+            interrupted: true,
           });
+          completed.add(call.id);
+        }
 
     await store.save(session);
   }
@@ -285,13 +328,29 @@ export class AgentRuntime {
     signal: AbortSignal,
   ): Promise<ToolExecution> {
     const { tools, root } = this.options;
-    const tool = tools.get(call.name);
+    await this.emit("tool-request", {
+      callId: call.id,
+      name: call.name,
+      kind: tools.get(call.name)?.kind,
+      arguments: call.arguments,
+    });
+    const blockedResult = (): ToolExecution => ({
+      call,
+      result: {
+        text: session.invalidToolRequests!.blocked!.reason,
+        isError: true,
+      },
+      blocked: true,
+    });
+    if (session.invalidToolRequests?.blocked) return blockedResult();
     try {
-      if (!tool) throw new Error(`Unknown tool: ${call.name}`);
+      const tool = tools.validate(call);
+      if (resetInvalidToolRequests(session, call.name)) await this.options.store.save(session);
+      if (session.invalidToolRequests?.blocked) return blockedResult();
       if (session.mode === "plan" && tool.kind !== "read")
         throw new Error(`Plan mode denies ${tool.name}. Switch to build mode to implement.`);
-      tools.validate(call);
       await this.options.permissions.authorize(tool, call.arguments);
+      if (session.invalidToolRequests?.blocked) return blockedResult();
       // Durable start precedes the side effect.
       await this.emit("tool-start", {
         callId: call.id,
@@ -306,17 +365,29 @@ export class AgentRuntime {
       return { call, result };
     } catch (error) {
       if (signal.aborted) throw error;
+      let text = error instanceof Error ? error.message : String(error);
+      let blocked = false;
+      if (error instanceof ToolValidationError) {
+        text = recordInvalidToolRequest(session, call.name, error);
+        blocked = Boolean(session.invalidToolRequests?.blocked);
+        // Counts and the stop decision must survive a restart before another call can run.
+        await this.options.store.save(session);
+      }
       return {
         call,
         result: {
-          text: error instanceof Error ? error.message : String(error),
+          text,
           isError: true,
         },
+        blocked,
       };
     }
   }
 
-  private async recordToolResult(session: Session, { call, result }: ToolExecution): Promise<void> {
+  private async recordToolResult(
+    session: Session,
+    { call, result, blocked, interrupted }: ToolExecution,
+  ): Promise<void> {
     const { store } = this.options;
     const full = result.fullOutput ?? result.text;
     const artifact = await store.putArtifact(session.id, full);
@@ -332,16 +403,24 @@ export class AgentRuntime {
       ...new Set([...session.ledger.touchedPaths, ...(result.changedPaths ?? [])]),
     ];
     if (call.name === "shell_run") session.ledger.verification.push(boundText(result.text, 400));
-    await store.save(session);
-    await this.emit("tool-end", {
-      callId: call.id,
-      name: call.name,
-      result: output,
-      artifact,
-      isError: result.isError ?? false,
-      details: result.details,
-      changedPaths: result.changedPaths,
-    });
+    // Save provider result and terminal presentation together before publication.
+    await this.emit(
+      "tool-end",
+      {
+        callId: call.id,
+        name: call.name,
+        kind: this.options.tools.get(call.name)?.kind,
+        arguments: call.arguments,
+        result: output,
+        artifact,
+        isError: result.isError ?? false,
+        blocked: blocked ?? false,
+        interrupted: interrupted ?? false,
+        details: result.details,
+        changedPaths: result.changedPaths,
+      },
+      { saveSession: true },
+    );
   }
 
   private async executeBatch(

@@ -73,7 +73,10 @@ export function createWorkspaceFocus(options: FocusOptions) {
       if (key.name === "pageup" || key.name === "pagedown")
         chatScroll?.scrollBy(key.name === "pageup" ? -1 : 1, "viewport");
       if (key.name === "escape") setChatFocus(false);
-      if (key.name === "space" || key.name === "return") options.conversation.toggleReasoning();
+      if (key.name === "space" || key.name === "return") options.conversation.toggleDetails();
+      if (key.name === "f") void options.conversation.openArtifact();
+      if (key.name === "left" || key.name === "right")
+        options.conversation.changeArtifactPage(key.name === "left" ? -1 : 1);
       return true;
     }
     if (

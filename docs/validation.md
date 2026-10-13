@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 212 tests with 1,136 assertions, including chat, first-run setup
+The local suite passes 248 tests with 1,359 assertions, including chat, first-run setup
 and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
@@ -103,6 +103,19 @@ Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfull
   validation error for a string, rediscovers the schema, and persists the corrected
   numeric version. Invalid arguments trigger no approval, execution start, hooks
   or checkpoint capture. Argument validation does not coerce model output.
+- Tool request/start/end events render durable chat cards with bounded labeled
+  inputs, explicit states, visible errors and full saved-result browsing. Source
+  and packaged PTY fixtures restore successful/failed/blocked cards after restart,
+  open artifacts through the real local loader and make no extra model requests.
+  SQLite tests cover hard process termination, old-snapshot migration, event
+  watermarks, artifact handles, completed-result snapshots before end publication,
+  and uncertain interrupted effects. Terminal controls and credential fields are
+  masked in previews; Unicode survives output paging.
+- A durable limiter stops inference after three repeated schema problems per tool,
+  rejects later mutations in the same batch and drains concurrent reads. Corrected
+  arguments clear prior failures; permission/execution failures do not count.
+  Empty resume preserves the stop, while explicit human input resets it. Tool
+  presentation records remain outside provider context and its token budget.
 - History selection commits before another task can change the active session.
   Failed preflight messages survive subsequent display reconciliation. Streaming
   text and reasoning survive a hard-killed child process; event watermarks prevent
@@ -144,17 +157,15 @@ cached tokens, for this one task.
 
 Follow-up priorities:
 
-- **P1, mitigated:** repeated invalid calls and an unjustified tool-bug claim.
+- **P1, implemented mitigation:** repeated invalid calls and an unjustified tool-bug claim.
   Explicit integer schema, expected/received type diagnostics and model guidance
   now address the observed confusion. A failed proposal is not a persisted design;
-  instructions prohibit bypassing that workflow. An automatic retry limit for
-  repeated argument errors remains open; prompt guidance alone cannot guarantee
-  that a live model will recover.
-- **P1, open:** persistent, readable tool activity in chat. Approval cards now
-  explain requested effects, but normal tool calls/results still only update the
-  activity footer and phase. Retain tool name, state, relevant target, error and
-  artifact access in presentation history, including after restoring a session,
-  without adding UI records to model context.
+  instructions prohibit bypassing that workflow. The runtime now stops after three
+  repeated argument errors for the same tool/schema problem. This bounds the loop;
+  it does not guarantee that a live model will recover correctly.
+- **P1, implemented:** persistent, readable tool activity in chat. Cards retain
+  tool name, state, target, error and artifact access after session restoration,
+  without adding presentation records to model context.
 - **P2, open in the generated Python example:** its usage docstring advertises
   `--human`, while its parser supports `--bytes`; `--human` exits with status 2.
   Traversal silently skips inaccessible entries and can report incomplete totals

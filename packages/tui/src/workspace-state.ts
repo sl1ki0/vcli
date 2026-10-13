@@ -25,7 +25,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     props.initialSession ? usageLabel(props.initialSession.usage) : "0 tokens",
   );
   const [touched, setTouched] = createSignal<Set<string>>(new Set());
-  const conversation = createConversation(props.initialSession);
+  const conversation = createConversation(props.initialSession, props.readArtifact);
   let refreshBusy = false;
   let approvalScroll: ScrollBoxRenderable | undefined;
   const narrow = createMemo(() => dimensions().width < 110);

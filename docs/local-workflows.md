@@ -78,6 +78,22 @@ Before-hook failure blocks the tool. After-hook failure is reported alongside th
 
 Use `tools_search` to expose workflow tool schemas only when needed. The initial tool schema budget remains 4,000 estimated tokens. Local tool discovery continues to work in plan/read-only mode without starting configured MCP servers. `files_list` supports a ripgrep glob; `git_diff` reviews staged or unstaged changes with external diff programs and text conversion disabled. Large outputs retain artifact handles instead of filling model context.
 
+Tool requests, results and errors also remain in the chat as expandable cards.
+Each card shows the action, target and execution state; argument/permission errors
+appear even when execution never started. Space/Enter expands the selected card,
+F opens its saved result, and Left/Right pages through long output. These local
+views make no model calls. Cards use bounded previews with masked credential
+fields and literal terminal controls; full result artifacts stay separate from
+provider context. Saved sessions restore cards without replaying tool effects.
+
+The runtime stops after three requests with the same argument-validation problem
+for one tool, even if unrelated argument fields change. Valid arguments clear that
+tool's prior failures; permission refusals, command failures and hook failures
+do not count as argument errors. The durable stop prevents empty resume from
+spending another inference request. Send a new human message to reset the limit.
+Any remaining calls in the stopped batch receive blocked results rather than
+performing mutations; already-running reads drain before the task closes.
+
 ## Scope of this release
 
 | Local capability                                                          | Current support                                                                                     |

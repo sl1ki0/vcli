@@ -140,6 +140,16 @@ describe("harness boundaries", () => {
     const session = await runtime.run("Read concurrently", controller.signal);
     expect(session.status).toBe("aborted");
     expect(drained).toBe(true);
+    const cards = session.chat?.filter((message) => message.role === "tool") ?? [];
+    expect(cards).toHaveLength(2);
+    expect(cards.every((message) => message.tool?.state === "interrupted")).toBe(true);
+    expect(cards.every((message) => message.status === "aborted")).toBe(true);
+    expect(cards.every((message) => message.text.includes("No completion was recorded"))).toBe(
+      true,
+    );
+    expect(
+      store.session?.chat?.filter((message) => message.tool?.state === "running"),
+    ).toHaveLength(0);
   });
   test("Unicode results remain inside byte-estimated budgets without broken characters", () => {
     for (const budget of [0, 1, 10, 20, 200, 3000]) {
