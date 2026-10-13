@@ -8,6 +8,8 @@ export function parseCliArgs() {
     options: {
       help: { type: "boolean", short: "h" },
       json: { type: "boolean" },
+      plan: { type: "boolean" },
+      build: { type: "boolean" },
       root: { type: "string" },
       format: { type: "string" },
       output: { type: "string" },
@@ -23,6 +25,7 @@ export function parseCliArgs() {
       marketplace: { type: "string" },
     },
   });
+  if (values.plan && values.build) throw new Error("Choose either --plan or --build.");
   return { values, positionals };
 }
 export type CliValues = ReturnType<typeof parseCliArgs>["values"];

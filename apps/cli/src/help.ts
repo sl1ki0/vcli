@@ -3,9 +3,13 @@ export const HELP = `vcli — architecture-first AI coding
 vcli                                  Open the visual workspace
 vcli setup                            Connect a provider, model and API key
 vcli run <task> [--json]                Run the coding agent
+vcli run <task> --plan                 Explore and save a plan without source edits
+vcli memory|hooks|tasks|plans show      Inspect local workflow state
+vcli checkpoints list|restore <id>     Inspect or rewind a captured file edit
 vcli architecture scan|view|check      Inspect structure or declared drift
 vcli architecture export --format svg|png|json --output <file>
 vcli sessions list|resume <id> [task]   Inspect or resume durable sessions
+     sessions resume <id> --build      Explicitly implement a saved planning session
 vcli config show|set <key> <value>      Configure provider/model/permissions/budgets
 vcli plugins list|install <source>|remove <name>
 vcli plugins marketplace add <name> <source>|list|refresh <name>|remove <name>

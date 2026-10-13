@@ -2,12 +2,15 @@ import { join } from "node:path";
 import { discoverSkills, PluginManager } from "@vcli/integrations";
 import { configHome } from "./config.ts";
 import { SqliteSessionStore } from "./store.ts";
+import { inspectWorkflow, type WorkflowInspection } from "./workflows/inspection.ts";
 
 /** Read-only workspace panels. They discover metadata without connecting MCP or a model. */
 export async function inspectWorkspace(
   root: string,
-  topic: "sessions" | "plugins" | "skills",
+  topic: "sessions" | "plugins" | "skills" | WorkflowInspection,
 ): Promise<string> {
+  if (topic !== "sessions" && topic !== "plugins" && topic !== "skills")
+    return inspectWorkflow(root, topic);
   if (topic === "sessions") {
     const store = await SqliteSessionStore.open(root);
     try {

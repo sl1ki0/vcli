@@ -9,6 +9,7 @@ import { configCommand } from "./commands/config.ts";
 import { pluginsCommand } from "./commands/plugins.ts";
 import { sessionsCommand } from "./commands/sessions.ts";
 import { runCommand } from "./commands/run.ts";
+import { workflowsCommand } from "./commands/workflows.ts";
 export { printTree } from "./io.ts";
 
 async function main(): Promise<void> {
@@ -22,6 +23,13 @@ async function main(): Promise<void> {
   const context = { root, config, architecture, values };
   const [command, action, ...rest] = positionals;
   switch (command) {
+    case "memory":
+    case "hooks":
+    case "tasks":
+    case "checkpoints":
+      return workflowsCommand(command, action, rest, context);
+    case "plans":
+      return workflowsCommand("plan", action, rest, context);
     case "architecture":
       return architectureCommand(action, rest, context);
     case "config":
@@ -40,6 +48,7 @@ async function main(): Promise<void> {
     case undefined:
       return interactive(root, config, architecture, await architecture.scan(root), {
         overrides: configOverrides(values),
+        mode: values.plan ? "plan" : "build",
       });
     default:
       throw new Error("Unknown command " + command + ". Use --help.");

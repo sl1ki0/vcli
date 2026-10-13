@@ -10,14 +10,18 @@ export async function runCommand(
   context: CommandContext,
 ) {
   const { root, config, architecture, values } = context;
+  let mode: "build" | "plan" = values.plan ? "plan" : "build";
   if (!resume && !prompt) throw new Error("Task required: vcli run <task>");
-  if (resume && !config.model) {
+  if (resume) {
     const store = await SqliteSessionStore.open(root);
     const session = await store.get(resume);
     store.close();
     if (!session) throw new Error("Session not found");
-    config.provider = session.provider as Config["provider"];
-    config.model = session.model;
+    if (!config.model) {
+      config.provider = session.provider as Config["provider"];
+      config.model = session.model;
+    }
+    if (!values.plan && !values.build) mode = session.mode ?? "build";
   }
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -27,8 +31,13 @@ export async function runCommand(
     else if (["tool-start", "status"].includes(event.type))
       await writeOutput(`\n${event.data.name ?? event.data.status}\n`, "stderr");
   };
-  const harness = await createHarness(root, config, architecture, emit, (tool, args) =>
-    confirm(tool, args, controller.signal),
+  const harness = await createHarness(
+    root,
+    config,
+    architecture,
+    emit,
+    (tool, args) => confirm(tool, args, controller.signal),
+    { mode },
   );
   process.once("SIGINT", cancel);
   try {
