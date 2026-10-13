@@ -165,6 +165,10 @@ export class ProjectHooks {
     private readonly permissions: PermissionGate,
   ) {}
 
+  get hasHooks(): boolean {
+    return this.config.beforeTool.length > 0 || this.config.afterTool.length > 0;
+  }
+
   async beforeTool(call: ToolCall, context: ToolContext): Promise<HookReport[]> {
     return this.run("beforeTool", call, context);
   }

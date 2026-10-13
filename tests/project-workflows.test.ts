@@ -101,6 +101,14 @@ describe("project memory", () => {
 });
 
 describe("project command hooks", () => {
+  test("reports whether commands require serialized execution", async () => {
+    const root = await fixture();
+    expect((await loadProjectHooks(root, new PermissionGate("yolo"))).hasHooks).toBe(false);
+    expect((await hooks(root, { beforeTool: [] })).hasHooks).toBe(false);
+    expect(
+      (await hooks(root, { afterTool: [{ name: "configured", command: "true" }] })).hasHooks,
+    ).toBe(true);
+  });
   test("matches exact tool names, receives structured stdin, and reloads external edits", async () => {
     const root = await fixture();
     const runner = await hooks(root, {
