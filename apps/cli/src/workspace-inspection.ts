@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { discoverSkills, PluginManager } from "@vcli/integrations";
+import { discoverSkills, PluginManager, projectSkillLocations } from "@vcli/integrations";
 import { configHome } from "./config.ts";
 import { SqliteSessionStore } from "./store.ts";
 import { inspectWorkflow, type WorkflowInspection } from "./workflows/inspection.ts";
@@ -28,24 +28,24 @@ export async function inspectWorkspace(
     }
   }
 
-  const plugins = await new PluginManager(join(configHome(), "extensions")).list();
+  const plugins = await new PluginManager(join(configHome(), "extensions")).list({
+    workspaceRoot: root,
+  });
   if (topic === "plugins")
     return plugins.length
       ? plugins
-          .map(
-            (plugin) =>
-              `${plugin.name} · ${plugin.skills.length} skills · ${plugin.servers.length} MCP servers\n${plugin.unsupported.length} unsupported components\n`,
+          .map((plugin) =>
+            [
+              `${plugin.name} · ${plugin.ecosystem}${plugin.disabled ? " · disabled" : ""} · ${plugin.skills.length} skills · ${plugin.servers.length} MCP servers`,
+              ...plugin.unsupported.map((reason) => `Unsupported: ${reason}`),
+              "",
+            ].join("\n"),
           )
           .join("\n")
       : "No plugins installed.\nInstall from your shell: vcli plugins install <path-or-git-source>\nBrowse catalogs: vcli plugins marketplace list";
 
   const diagnostics: string[] = [];
-  const local = await discoverSkills(
-    root,
-    [".vcli/skills", ".agents/skills", ".claude/skills", ".gemini/skills"],
-    "project",
-    diagnostics,
-  );
+  const local = await discoverSkills(root, [...projectSkillLocations], "project", diagnostics);
   const skills = [...local, ...plugins.flatMap((plugin) => plugin.skills)];
   return [
     skills.length

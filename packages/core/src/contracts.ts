@@ -250,13 +250,15 @@ export interface Skill {
   path: string;
   plugin?: string;
 }
+export type PluginEcosystem = "portable" | "claude" | "codex" | "gemini" | "qwen" | "qoder";
 export interface Plugin {
   name: string;
   version: string;
   root: string;
   source: string;
   revision?: string;
-  ecosystem: "portable" | "claude" | "codex" | "gemini";
+  ecosystem: PluginEcosystem | "unknown";
+  disabled?: boolean;
   skills: Skill[];
   servers: NormalizedMcpServer[];
   unsupported: string[];

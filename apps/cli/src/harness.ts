@@ -10,7 +10,13 @@ import {
   type ApprovalDecision,
 } from "@vcli/core";
 import { createProvider } from "@vcli/providers";
-import { discoverSkills, loadSkill, McpManager, PluginManager } from "@vcli/integrations";
+import {
+  discoverSkills,
+  loadSkill,
+  McpManager,
+  PluginManager,
+  projectSkillLocations,
+} from "@vcli/integrations";
 import { configHome, type Config } from "./config.ts";
 import { registerBuiltins } from "./builtin-tools.ts";
 import { SqliteSessionStore } from "./store.ts";
@@ -46,23 +52,22 @@ export async function createHarness(
   const manager = new PluginManager(join(configHome(), "extensions"));
   let plugins;
   try {
-    plugins = await manager.list();
+    plugins = await manager.list({ workspaceRoot: root });
   } catch (error) {
     store.close();
     throw error;
   }
-  const diagnostics: string[] = [];
+  const diagnostics: string[] = plugins.flatMap((plugin) =>
+    plugin.unsupported.map((reason) => `Plugin ${plugin.name}: ${reason}`),
+  );
   const localSkills = await discoverSkills(
     root,
-    [".vcli/skills", ".agents/skills", ".claude/skills", ".gemini/skills"],
+    [...projectSkillLocations],
     "project",
     diagnostics,
   );
   const skills = [...localSkills, ...plugins.flatMap((p) => p.skills)];
-  const servers = [
-    ...config.mcpServers,
-    ...plugins.flatMap((p) => p.servers.map((s) => ({ ...s, name: `${p.name}.${s.name}` }))),
-  ];
+  const servers = [...config.mcpServers, ...plugins.flatMap((p) => p.servers)];
   const mcp = new McpManager(servers);
   const permissions = new PermissionGate(
     options.mode === "plan" ? "read-only" : config.permission,

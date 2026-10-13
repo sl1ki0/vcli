@@ -1,10 +1,11 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import type { NormalizedMcpServer, Plugin } from "@vcli/core";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/client";
 import { containedPath, exists, object, validateServerName, within } from "./paths.ts";
 import { mcpSchema } from "./schemas.ts";
+import { pluginFormat } from "./formats.ts";
 
 interface ImportOptions {
   dataRoot?: string;
@@ -51,7 +52,8 @@ function configExpansion(
       CODEX_PLUGIN_ROOT: plugin.root,
       extensionPath: plugin.root,
       workspacePath: options.workspaceRoot ?? process.cwd(),
-      "/": "/",
+      "/": sep,
+      pathSeparator: sep,
     });
   return (value) =>
     value.replace(/\$\{([^}]+)\}/g, (match, expression: string) => {
@@ -59,7 +61,7 @@ function configExpansion(
       if (Object.hasOwn(replacements, expression)) return replacements[expression]!;
       if (portable) return match;
       const variable = /^([A-Za-z_][A-Za-z0-9_]*)(?::-([\s\S]*))?$/.exec(expression);
-      if (!variable) return match;
+      if (!variable) throw new Error(`MCP server ${name}: unsupported variable substitution`);
       const [, key, fallback] = variable;
       const resolved = process.env[key!] ?? fallback;
       if (resolved === undefined)
@@ -71,6 +73,13 @@ function configExpansion(
 function validateTransport(context: ServerContext): void {
   const { name, config, plugin, portable } = context;
   const declaredType = config.type;
+  for (const key of ["type", "command", "url", "httpUrl", "cwd"])
+    if (config[key] !== undefined && (typeof config[key] !== "string" || !config[key]))
+      throw new Error(`MCP server ${name}: ${key} must be a nonempty string`);
+  if (config.url !== undefined && config.httpUrl !== undefined)
+    throw new Error(`MCP server ${name}: declare only one of url and httpUrl`);
+  if ((config.url !== undefined || config.httpUrl !== undefined) && config.command !== undefined)
+    throw new Error(`MCP server ${name}: command conflicts with HTTP transport`);
   if (!portable) {
     if (config.includeTools !== undefined || config.excludeTools !== undefined)
       throw new Error(
@@ -103,15 +112,15 @@ function validateTransport(context: ServerContext): void {
   }
   if (declaredType === "sse")
     throw new Error(`MCP server ${name}: legacy SSE transport is unsupported; use Streamable HTTP`);
-  const geminiSse =
-    plugin.ecosystem === "gemini" &&
+  const legacyUrl =
+    pluginFormat(plugin.ecosystem).legacyUrl &&
     typeof config.url === "string" &&
     config.httpUrl === undefined &&
     declaredType !== "http" &&
     declaredType !== "streamable-http";
-  if (geminiSse)
+  if (legacyUrl)
     throw new Error(
-      `MCP server ${name}: Gemini url uses legacy SSE; use httpUrl for Streamable HTTP`,
+      `MCP server ${name}: ${plugin.ecosystem} url uses legacy SSE; use httpUrl for Streamable HTTP`,
     );
 }
 
@@ -119,21 +128,25 @@ function normalizeHttpServer(context: ServerContext): NormalizedMcpServer {
   const { name, namespace, config, plugin, portable, expand } = context;
   if (config.type && !["http", "streamable-http"].includes(String(config.type)))
     throw new Error(`MCP server ${name}: URL conflicts with transport type`);
-  const configuredUrl = String(config.httpUrl ?? config.url);
+  for (const key of ["args", "env", "cwd"])
+    if (config[key] !== undefined)
+      throw new Error(`MCP server ${name}: ${key} is unsupported for HTTP transport`);
+  const configuredUrl = (config.httpUrl ?? config.url) as string;
   const url = new URL(portable ? configuredUrl : expand(configuredUrl));
   if (url.username || url.password || url.hash || !["https:", "http:"].includes(url.protocol))
     throw new Error(`MCP server ${name}: invalid HTTP URL`);
   if (url.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
     throw new Error(`MCP server ${name}: non-local HTTP endpoint must use HTTPS`);
 
-  const headers = config.headers
-    ? Object.fromEntries(
-        Object.entries(stringMap(config.headers, `MCP ${name} headers`)).map(([key, value]) => [
-          key,
-          portable ? value : expand(value),
-        ]),
-      )
-    : undefined;
+  const headers =
+    config.headers !== undefined
+      ? Object.fromEntries(
+          Object.entries(stringMap(config.headers, `MCP ${name} headers`)).map(([key, value]) => [
+            key,
+            portable ? value : expand(value),
+          ]),
+        )
+      : undefined;
   if (headers) {
     if (Object.entries(headers).some(([key, value]) => /[\r\n]/.test(key + value)))
       throw new Error(`MCP server ${name}: invalid header`);

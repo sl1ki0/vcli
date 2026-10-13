@@ -3,6 +3,14 @@ import { basename, dirname, join } from "node:path";
 import type { Skill } from "@vcli/core";
 import { containedPath, exists, message, object, validateName } from "./paths.ts";
 
+export const projectSkillLocations = [
+  ".vcli/skills",
+  ".agents/skills",
+  ".claude/skills",
+  ".gemini/skills",
+  ".qwen/skills",
+];
+
 const FRONTMATTER_LIMIT = 16_384;
 
 export async function readSkillMetadata(path: string): Promise<Record<string, unknown>> {

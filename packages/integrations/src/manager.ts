@@ -2,30 +2,31 @@ import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/pro
 import { basename, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Plugin } from "@vcli/core";
-import { loadPlugin } from "./plugins.ts";
+import type { Plugin, PluginEcosystem } from "@vcli/core";
+import { loadPlugin, type LoadPluginOptions } from "./plugins.ts";
 import { loadSkill } from "./skills.ts";
-import { containedPath, exists, object, readJson, relativeSubdir, validateName } from "./paths.ts";
+import { pluginFormat } from "./formats.ts";
+import { containedPath, exists, relativeSubdir, validateName } from "./paths.ts";
+import { readMarketplaceCatalog, type MarketplaceEntry } from "./catalogs.ts";
+export type { MarketplaceEntry } from "./catalogs.ts";
 
 const run = promisify(execFile);
 export interface InstallOptions {
   revision?: string;
   subdir?: string;
+  format?: PluginEcosystem;
 }
 interface InstalledPlugin {
   name: string;
   source: string;
   revision?: string;
   subdir?: string;
+  format?: PluginEcosystem;
+  marketplaceManifest?: Record<string, unknown>;
+  marketplaceStrict?: boolean;
+  ecosystem?: PluginEcosystem;
+  manifestRequired?: boolean;
   installedAt: string;
-}
-export interface MarketplaceEntry {
-  name: string;
-  description?: string;
-  source: string;
-  revision?: string;
-  subdir?: string;
-  local: boolean;
 }
 export interface Marketplace {
   name: string;
@@ -122,92 +123,6 @@ async function acquire(
   }
 }
 
-async function readCatalogEntry(
-  root: string,
-  name: string,
-  entry: Record<string, unknown>,
-): Promise<MarketplaceEntry> {
-  let source: string;
-  let local = false;
-  let revision = typeof entry.revision === "string" ? entry.revision : undefined;
-  let subdir = typeof entry.subdir === "string" ? relativeSubdir(entry.subdir) : undefined;
-  if (typeof entry.source === "string") {
-    source = entry.source;
-    local = !gitSource(source);
-  } else {
-    const origin = object(entry.source, `Source for ${name}`);
-    const kind = origin.source ?? origin.type;
-    if (typeof origin.path === "string" && (!kind || kind === "directory" || kind === "local")) {
-      source = origin.path;
-      local = true;
-    } else if (
-      kind === "github" &&
-      typeof origin.repo === "string" &&
-      /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(origin.repo)
-    ) {
-      source = `https://github.com/${origin.repo}.git`;
-    } else if ((kind === "git" || kind === "repository") && typeof origin.url === "string")
-      source = origin.url;
-    else throw new Error(`Marketplace plugin ${name}: unsupported source format`);
-    revision =
-      typeof origin.sha === "string"
-        ? origin.sha
-        : typeof origin.ref === "string"
-          ? origin.ref
-          : revision;
-    subdir = typeof origin.path === "string" && !local ? relativeSubdir(origin.path) : subdir;
-  }
-  if (local) {
-    if (!source.startsWith("./"))
-      throw new Error(`Marketplace plugin ${name}: local source must start with ./`);
-    await containedPath(root, source);
-    if (subdir) await containedPath(root, join(source, subdir));
-  } else if (!gitSource(source))
-    throw new Error(`Marketplace plugin ${name}: unsupported repository URL`);
-  return {
-    name,
-    description: typeof entry.description === "string" ? entry.description : undefined,
-    source,
-    local,
-    revision,
-    subdir,
-  };
-}
-
-async function catalog(
-  root: string,
-): Promise<{ plugins: MarketplaceEntry[]; unsupported: string[] }> {
-  const paths = [
-    ".claude-plugin/marketplace.json",
-    ".agents/plugins/marketplace.json",
-    "marketplace.json",
-  ];
-  const path = (
-    await Promise.all(
-      paths.map(async (path) => ((await exists(join(root, path))) ? path : undefined)),
-    )
-  ).find(Boolean);
-  if (!path) throw new Error("No marketplace catalog found");
-  const data = await readJson(await containedPath(root, path));
-  if (!Array.isArray(data.plugins)) throw new Error("Marketplace plugins must be an array");
-  const plugins: MarketplaceEntry[] = [];
-  const unsupported: string[] = [];
-  const names = new Set<string>();
-  for (const value of data.plugins) {
-    try {
-      const entry = object(value, "Marketplace entry");
-      const name = validateName(entry.name, "Marketplace plugin name");
-      if (names.has(name)) throw new Error(`Duplicate marketplace plugin: ${name}`);
-      const plugin = await readCatalogEntry(root, name, entry);
-      names.add(name);
-      plugins.push(plugin);
-    } catch (error) {
-      unsupported.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  return { plugins, unsupported };
-}
-
 /** Stores immutable snapshots; updates happen only through an explicit refresh/install. */
 export class PluginManager {
   readonly stateRoot: string;
@@ -250,17 +165,42 @@ export class PluginManager {
     return mkdtemp(join(this.stateRoot, ".install-"));
   }
 
-  async list(): Promise<Plugin[]> {
-    await this.mutation;
-    const state = await this.state();
-    return Promise.all(
-      state.plugins.map(async (record) => {
-        const plugin = await loadPlugin(join(this.stateRoot, "plugins", record.name), {
-          dataRoot: join(this.stateRoot, "data", record.name),
-        });
-        return { ...plugin, source: record.source, revision: record.revision };
-      }),
-    );
+  list(options: Pick<LoadPluginOptions, "workspaceRoot"> = {}): Promise<Plugin[]> {
+    return this.serialize(async () => {
+      const state = await this.state();
+      return Promise.all(
+        state.plugins.map(async (record) => {
+          const root = join(this.stateRoot, "plugins", record.name);
+          try {
+            const plugin = await loadPlugin(root, {
+              dataRoot: join(this.stateRoot, "data", record.name),
+              ...options,
+              format: record.format,
+              marketplaceManifest: record.marketplaceManifest,
+              marketplaceStrict: record.marketplaceStrict,
+              requireManifest: record.manifestRequired,
+            });
+            if (plugin.name !== record.name) throw new Error("Installed plugin identity changed");
+            return { ...plugin, source: record.source, revision: record.revision };
+          } catch (error) {
+            return {
+              name: record.name,
+              version: "unknown",
+              root,
+              source: record.source,
+              revision: record.revision,
+              ecosystem: record.ecosystem ?? record.format ?? "unknown",
+              disabled: true,
+              skills: [],
+              servers: [],
+              unsupported: [
+                `Plugin disabled: ${error instanceof Error ? error.message : String(error)}`,
+              ],
+            } satisfies Plugin;
+          }
+        }),
+      );
+    });
   }
 
   async loadSkill(name: string): Promise<string> {
@@ -277,7 +217,13 @@ export class PluginManager {
   private async installSnapshot(
     source: string,
     options: InstallOptions,
-    provenance?: { source: string; revision?: string; expectedName?: string },
+    provenance?: {
+      source: string;
+      revision?: string;
+      expectedName?: string;
+      marketplaceManifest?: Record<string, unknown>;
+      marketplaceStrict?: boolean;
+    },
   ): Promise<Plugin> {
     const state = await this.state();
     const staging = await this.temporary();
@@ -286,7 +232,17 @@ export class PluginManager {
     let installed = false;
     try {
       const acquired = await acquire(source, join(staging, "package"), options);
-      const preview = await loadPlugin(acquired.root, { nameHint: acquired.nameHint });
+      const importOptions = {
+        nameHint: acquired.nameHint,
+        format: options.format,
+        marketplaceManifest: provenance?.marketplaceManifest,
+        marketplaceStrict: provenance?.marketplaceStrict,
+        requireManifest: false,
+      };
+      const preview = await loadPlugin(acquired.root, importOptions);
+      const format = pluginFormat(preview.ecosystem);
+      importOptions.requireManifest = await exists(join(acquired.root, format.manifest));
+      if (importOptions.requireManifest) importOptions.format = format.id;
       if (provenance?.expectedName && preview.name !== provenance.expectedName)
         throw new Error(
           `Catalog plugin ${provenance.expectedName} has manifest name ${preview.name}`,
@@ -304,7 +260,7 @@ export class PluginManager {
       const dataRoot = join(this.stateRoot, "data", preview.name);
       if (!(await exists(dataRoot))) createdData = dataRoot;
       await mkdir(dataRoot, { recursive: true });
-      const plugin = await loadPlugin(destination, { dataRoot });
+      const plugin = await loadPlugin(destination, { ...importOptions, dataRoot });
       plugin.source = provenance?.source ?? (gitSource(source) ? source : resolve(source));
       plugin.revision = provenance?.revision ?? acquired.revision;
       state.plugins.push({
@@ -312,6 +268,11 @@ export class PluginManager {
         source: plugin.source,
         revision: plugin.revision,
         subdir: options.subdir,
+        format: importOptions.format,
+        manifestRequired: importOptions.requireManifest,
+        marketplaceManifest: provenance?.marketplaceManifest,
+        marketplaceStrict: provenance?.marketplaceStrict,
+        ecosystem: plugin.ecosystem === "unknown" ? undefined : plugin.ecosystem,
         installedAt: new Date().toISOString(),
       });
       await this.save(state);
@@ -379,9 +340,8 @@ export class PluginManager {
     });
   }
 
-  async listMarketplaces(): Promise<Marketplace[]> {
-    await this.mutation;
-    return (await this.state()).marketplaces;
+  listMarketplaces(): Promise<Marketplace[]> {
+    return this.serialize(async () => (await this.state()).marketplaces);
   }
 
   refreshMarketplace(name: string): Promise<Marketplace> {
@@ -411,7 +371,7 @@ export class PluginManager {
     let cleanup = false;
     try {
       const acquired = await acquire(source, join(staging, "catalog"), options);
-      const contents = await catalog(acquired.root);
+      const contents = await readMarketplaceCatalog(acquired.root);
       await mkdir(join(this.stateRoot, "marketplaces"), { recursive: true });
       if (await exists(destination)) {
         await rename(destination, backup);
@@ -464,7 +424,11 @@ export class PluginManager {
     });
   }
 
-  installFromMarketplace(marketplaceName: string, pluginName: string): Promise<Plugin> {
+  installFromMarketplace(
+    marketplaceName: string,
+    pluginName: string,
+    options: Pick<InstallOptions, "format"> = {},
+  ): Promise<Plugin> {
     validateName(marketplaceName);
     validateName(pluginName);
     return this.serialize(async () => {
@@ -479,11 +443,13 @@ export class PluginManager {
         : entry.source;
       return this.installSnapshot(
         source,
-        { revision: entry.revision, subdir: entry.subdir },
+        { revision: entry.revision, subdir: entry.subdir, format: options.format },
         {
           source: entry.local ? `${marketplace.source}#${entry.source}` : entry.source,
           revision: entry.local ? marketplace.revision : undefined,
           expectedName: entry.name,
+          marketplaceManifest: entry.manifest,
+          marketplaceStrict: entry.strict,
         },
       );
     });

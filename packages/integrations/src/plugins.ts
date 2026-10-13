@@ -1,17 +1,22 @@
 import { basename, join } from "node:path";
 import { realpath, stat } from "node:fs/promises";
-import type { Plugin } from "@vcli/core";
+import type { Plugin, PluginEcosystem } from "@vcli/core";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/client";
 import { containedPath, exists, message, object, readJson, validateName } from "./paths.ts";
 import { discoverSkills, readSkillMetadata } from "./skills.ts";
 import { normalizeMcpServer } from "./mcp-config.ts";
 import { pluginSchema } from "./schemas.ts";
+import { pluginFormat, pluginFormats, vendorComponentFields } from "./formats.ts";
 
 export interface LoadPluginOptions {
   dataRoot?: string;
   workspaceRoot?: string;
   nameHint?: string;
+  format?: PluginEcosystem;
+  marketplaceManifest?: Record<string, unknown>;
+  marketplaceStrict?: boolean;
+  requireManifest?: boolean;
 }
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
@@ -54,25 +59,50 @@ async function readManifest(
 ): Promise<{ manifest: Record<string, unknown>; ecosystem: Plugin["ecosystem"] }> {
   let ecosystem: Plugin["ecosystem"] = "portable";
   let manifest: Record<string, unknown>;
-  const candidates = [
-    ["plugin.json", "portable"],
-    [".claude-plugin/plugin.json", "claude"],
-    [".codex-plugin/plugin.json", "codex"],
-    ["gemini-extension.json", "gemini"],
-  ] as const;
-  const candidate = (
+  const candidates = options.format ? [pluginFormat(options.format)] : pluginFormats;
+  const detected = (
     await Promise.all(
-      candidates.map(async ([path, type]) =>
-        (await exists(join(root, path))) ? { path, type } : undefined,
+      candidates.map(async (format) =>
+        (await exists(join(root, format.manifest))) ? format : undefined,
       ),
     )
-  ).find(Boolean);
+  ).filter((format) => format !== undefined);
+  if (detected.length > 1)
+    throw new Error(
+      `Multiple plugin manifests found (${detected.map((f) => f.id).join(", ")}); select --format explicitly`,
+    );
+  const candidate = detected[0];
   if (candidate) {
-    ecosystem = candidate.type;
-    manifest = await readJson(await containedPath(root, candidate.path));
+    ecosystem = candidate.id;
+    manifest = await readJson(await containedPath(root, candidate.manifest));
     if (ecosystem === "portable" && manifest.$schema !== PLUGIN_SCHEMA)
       throw new Error("Unsupported portable plugin schema; expected Agent Plugins 1.0.0");
     if (ecosystem === "portable") portableManifest(manifest);
+    if (options.marketplaceManifest) {
+      const entry = options.marketplaceManifest;
+      const components = vendorComponentFields.filter((key) => entry[key] !== undefined);
+      if (ecosystem !== "claude" && components.length)
+        throw new Error("Marketplace component declarations require a Claude plugin format");
+      if (components.length && options.marketplaceStrict === false)
+        throw new Error(
+          "Conflicting manifests: strict:false entry and plugin both declare components",
+        );
+      if (entry.skills !== undefined) {
+        manifest.skills = [
+          ...(manifest.skills === undefined ? [] : strings(manifest.skills, "skills")),
+          ...strings(entry.skills, "Marketplace skills"),
+        ];
+      }
+      // Unsupported components stay visible without activating host-specific behavior.
+      for (const key of components) if (key !== "skills") manifest[key] ??= entry[key];
+    }
+  } else if (options.requireManifest) {
+    throw new Error("Installed package manifest is missing");
+  } else if (options.marketplaceManifest && (!options.format || options.format === "claude")) {
+    ecosystem = "claude";
+    manifest = { ...options.marketplaceManifest };
+  } else if (options.format) {
+    throw new Error(`No ${options.format} plugin manifest found`);
   } else if (await exists(join(root, "SKILL.md"))) {
     manifest = {
       name: (await readSkillMetadata(await containedPath(root, "SKILL.md"))).name,
@@ -120,6 +150,10 @@ async function reportUnsupportedFeatures(
       "themes",
       "policies",
       "userConfig",
+      "workflows",
+      "channels",
+      "dependencies",
+      "migratedTo",
     ];
     for (const key of unsupported)
       if (manifest[key] !== undefined)
@@ -133,7 +167,8 @@ async function reportUnsupportedFeatures(
     "policies",
     ".app.json",
     ".lsp.json",
-    "GEMINI.md",
+    ...(pluginFormat(ecosystem).contextFile ? [pluginFormat(ecosystem).contextFile!] : []),
+    "workflows",
   ]) {
     if (
       (await exists(join(root, component))) &&
@@ -149,12 +184,16 @@ async function readServerConfigs(
 ): Promise<Record<string, unknown>> {
   const { root, ecosystem } = plugin;
   const configs: Record<string, unknown> = {};
-  const paths = ecosystem === "portable" ? ["mcp.json"] : [".mcp.json"];
-  if (
-    ecosystem !== "portable" &&
-    (typeof manifest.mcpServers === "string" || Array.isArray(manifest.mcpServers))
-  )
-    paths.push(...strings(manifest.mcpServers, "mcpServers"));
+  const paths = [pluginFormat(ecosystem).mcpFile];
+  if (ecosystem !== "portable" && manifest.mcpServers !== undefined) {
+    try {
+      if (typeof manifest.mcpServers === "string" || Array.isArray(manifest.mcpServers))
+        paths.push(...strings(manifest.mcpServers, "mcpServers"));
+      else object(manifest.mcpServers, "mcpServers");
+    } catch (error) {
+      plugin.unsupported.push(`MCP declaration: ${message(error)}`);
+    }
+  }
   for (const path of [...new Set(paths)]) {
     if (!(await exists(join(root, path)))) continue;
     try {
@@ -194,7 +233,7 @@ export async function loadPlugin(
     throw new Error("Plugin version must be a string");
   const plugin: Plugin = {
     name,
-    version: String(manifest.version ?? "0.0.0"),
+    version: manifest.version ?? "0.0.0",
     root,
     source: root,
     ecosystem,
@@ -203,9 +242,22 @@ export async function loadPlugin(
     unsupported: [],
   };
   await reportUnsupportedFeatures(plugin, manifest);
+  if (options.marketplaceManifest && (await exists(join(root, pluginFormat(ecosystem).manifest)))) {
+    for (const key of Object.keys(options.marketplaceManifest)) {
+      if (["name", "version", "description", ...vendorComponentFields].includes(key)) continue;
+      plugin.unsupported.push(
+        `Marketplace ${key} ignored because the package manifest is authoritative`,
+      );
+    }
+  }
   let locations = (await exists(join(root, "SKILL.md"))) ? ["."] : ["skills"];
-  if (ecosystem !== "portable" && manifest.skills !== undefined)
-    locations = [...locations, ...strings(manifest.skills, "skills")];
+  if (ecosystem !== "portable" && manifest.skills !== undefined) {
+    try {
+      locations = [...locations, ...strings(manifest.skills, "skills")];
+    } catch (error) {
+      plugin.unsupported.push(`Skill declaration: ${message(error)}`);
+    }
+  }
   plugin.skills = await discoverSkills(root, locations, name, plugin.unsupported);
   const configs = await readServerConfigs(plugin, manifest);
   for (const [serverName, config] of Object.entries(configs).sort(([a], [b]) =>

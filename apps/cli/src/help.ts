@@ -12,6 +12,9 @@ vcli sessions list|resume <id> [task]   Inspect or resume durable sessions
      sessions resume <id> --build      Explicitly implement a saved planning session
 vcli config show|set <key> <value>      Configure provider/model/permissions/budgets
 vcli plugins list|install <source>|remove <name>
+vcli plugins formats                  List supported plugin formats
+vcli plugins inspect <directory> [--format <format>]
+vcli plugins install <source> [--format <format>]
 vcli plugins marketplace add <name> <source>|list|refresh <name>|remove <name>
 vcli plugins install <plugin> --marketplace <name>
 

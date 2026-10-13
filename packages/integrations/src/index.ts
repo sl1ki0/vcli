@@ -1,5 +1,5 @@
 export { loadPlugin, type LoadPluginOptions } from "./plugins.ts";
-export { discoverSkills, loadSkill } from "./skills.ts";
+export { discoverSkills, loadSkill, projectSkillLocations } from "./skills.ts";
 export {
   PluginManager,
   type InstallOptions,
@@ -13,3 +13,4 @@ export {
   type McpConnector,
   type McpManagerOptions,
 } from "./mcp.ts";
+export { pluginFormat, pluginFormats, type PluginFormat } from "./formats.ts";
