@@ -63,6 +63,19 @@ the reasoning section. Mouse selection works too.
 The canvas uses real images when your terminal reports Kitty or Sixel support.
 “Tree fallback” means the detected transport does not support those graphics.
 
+## Local workflows
+
+- `/plan`: explore and preview a design without editing source. Send the planning request after switching modes.
+- `/build`: enable implementation under your current permission setting; then ask to implement the plan.
+- `/plans`, `/memory`, `/tasks`, `/hooks`: inspect saved plans, project instructions, task progress and hook configuration.
+- `/checkpoints`: list captured native file edits. `/rewind <id>` restores one if no later edit conflicts.
+
+Root `AGENTS.md`, `CLAUDE.md` and `.vcli/MEMORY.md` load automatically. Ask the model
+to track tasks or delegate a bounded read-only exploration when useful. Explorers
+share the parent token budget and cannot edit or run commands. Command hooks use
+`.vcli/hooks.json`; the included `WORKFLOWS.md` describes its schema and coverage.
+This release does not claim complete compatibility with every Claude Code feature.
+
 ## Shell commands
 
 ```sh

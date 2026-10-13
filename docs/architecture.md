@@ -100,6 +100,27 @@ Reasoning controls and provider-specific request fields belong to the adapters.
 The core receives normalized text, reasoning, tools and usage events; encrypted
 reasoning and signatures remain in opaque provider continuation metadata.
 
+## Local workflow boundaries
+
+The portable runtime accepts a budgeted instruction loader and an execution
+wrapper, after permission and argument validation. The CLI's `workflows/` modules
+implement memory, hooks, checkpoints, tasks, plans and explorers using filesystem
+and process facilities. They are assembled in `workflows/runtime.ts`; the core
+has no filesystem or shell knowledge. Configured command hooks serialize tool
+batches, since a hook attached to a read may have side effects.
+
+Plan mode is durable session state and an executor restriction, not only a prompt.
+The architecture preview tool returns an intended graph without writing the design.
+The TUI retains this draft across live scans independently of source indexing.
+
+Delegation reserves a share of the parent's remaining budget before creating a
+fresh child runtime. Children receive an explicit read-tool allowlist, their own
+context and persisted sessions, and no recursive delegation. Child events remain
+wrapped as subagent activity; child transcripts never enter the parent chat.
+Settlement adds actual usage and conservative unmeasured charges once. Concurrent
+reads drain before cancellation returns, allowing child accounting to finish
+before the host closes storage.
+
 ## Extending the system
 
 Keep new side effects behind `ToolDefinition` and `PermissionGate`. Return concise

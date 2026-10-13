@@ -4,7 +4,8 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 154 tests with 800 assertions, including chat and first-run setup.
+The local suite passes 204 tests with 1,062 assertions, including chat, first-run setup
+and the local workflow expansion.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
@@ -23,6 +24,23 @@ the offline benchmark. Both platform artifacts were uploaded successfully.
 
 ## Automated coverage
 
+- Planning denies source edits, shell and hook execution. The public CLI preserves
+  plan mode on resume, switches only with explicit build selection, persists plans
+  and tasks, and restores captured files. This workflow also runs against the
+  packaged executable outside the checkout using a local SDK streaming fixture.
+- Memory reloads on a resumed run, stays within its automatic token allocation,
+  and rejects stale writes. Hooks validate their schema, enforce permission modes,
+  serialize tool batches, cancel process groups, and preserve completed mutation
+  outcomes when after hooks fail.
+- Native file checkpoints preserve bytes and modes, restore new/existing files,
+  reject external edits and uncertain outcomes, and retain changes when post-hook
+  or checkpoint bookkeeping fails. They do not snapshot arbitrary shell effects.
+- Explorer agents use an isolated read-tool allowlist. Concurrent reservations
+  share the parent budget; missing usage remains charged, settlement is idempotent,
+  and cancellation drains children before closing storage. Tasks persist across
+  sessions and reject dependency cycles or blocked state transitions.
+- Workspace workflow commands make no model calls. Draft architecture previews
+  survive post-task refresh and explicit scans without writing the design document.
 - A real SDK connected to a local streaming HTTP fixture completes architecture
   query → design proposal → source patch → shell verification → graph update →
   SQLite resume. Proposal events precede following edits in the same tool batch.

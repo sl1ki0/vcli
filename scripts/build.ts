@@ -33,6 +33,7 @@ await copyFile(
   resolve(root, "dist/THIRD_PARTY_NOTICES.md"),
 );
 await copyFile(resolve(root, "docs/artifact-quickstart.md"), resolve(root, "dist/README.md"));
+await copyFile(resolve(root, "docs/local-workflows.md"), resolve(root, "dist/WORKFLOWS.md"));
 await copyFile(
   resolve(root, "packages/architecture/resources/OFL.txt"),
   resolve(root, "dist/JetBrainsMono-OFL.txt"),

@@ -222,6 +222,23 @@ calls are never retried. Supported transports are stdio and Streamable HTTP.
 Configuration, import compatibility and storage limitations are documented in
 [integrations](packages/integrations/README.md).
 
+## Local coding workflows
+
+Use `/plan` to explore and preview a design without source edits, then `/build`
+to implement it. `/plans`, `/memory`, `/tasks`, `/hooks` and `/checkpoints` inspect
+local records without model calls. `/rewind <id>` restores a captured native file
+edit only when the file still matches that edit.
+
+The harness loads root project instructions, supports revision-checked persistent
+memory, dependency-aware tasks, before/after command hooks, and up to two isolated
+read-only model explorers sharing the parent's token budget. Native file listing
+and Git diff tools are available through deferred discovery.
+
+See [local workflows](docs/local-workflows.md) for commands, hook configuration,
+token accounting, checkpoint coverage and a feature support matrix. These are
+independent implementations of documented workflows; complete Claude Code parity
+is not claimed.
+
 ## Development and packaging
 
 ```sh

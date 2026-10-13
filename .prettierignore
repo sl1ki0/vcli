@@ -5,3 +5,4 @@ dist
 bun.lock
 packages/architecture/resources
 licenses
+.vcli/config.json
