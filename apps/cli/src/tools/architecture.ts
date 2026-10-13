@@ -30,6 +30,23 @@ const designSchema = objectSchema(
 export function createArchitectureTools(architecture: ArchitectureService): ToolDefinition[] {
   return [
     {
+      name: "architecture_preview",
+      description:
+        "Display a proposed component design without writing it. Available in plan mode; use architecture_propose in build mode to persist an accepted design.",
+      kind: "read",
+      eager: false,
+      inputSchema: objectSchema({ design: designSchema }, ["design"]),
+      async execute(args, context) {
+        const design = args.design as unknown as ArchitectureDesign;
+        const intended = architecture.intendedGraph(context.root, design);
+        return {
+          text: `Design preview: ${design.components.length} components; no source or design files changed.`,
+          fullOutput: JSON.stringify(design),
+          details: { design, intended },
+        };
+      },
+    },
+    {
       name: "architecture_query",
       description:
         "Inspect project modules/dependencies and intended design, focused on a path or component; no model call.",

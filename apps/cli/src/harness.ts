@@ -14,9 +14,12 @@ import { configHome, type Config } from "./config.ts";
 import { registerBuiltins } from "./builtin-tools.ts";
 import { SqliteSessionStore } from "./store.ts";
 import { resolveCredential } from "./credentials.ts";
+import { createLocalWorkflows } from "./workflows/runtime.ts";
+import { savePlan } from "./workflows/plans.ts";
 
 export interface HarnessOptions {
   apiKey?: string;
+  mode?: "build" | "plan";
 }
 
 export async function createHarness(
@@ -60,7 +63,10 @@ export async function createHarness(
     ...plugins.flatMap((p) => p.servers.map((s) => ({ ...s, name: `${p.name}.${s.name}` }))),
   ];
   const mcp = new McpManager(servers);
-  const permissions = new PermissionGate(config.permission, approve);
+  const permissions = new PermissionGate(
+    options.mode === "plan" ? "read-only" : config.permission,
+    approve,
+  );
   let discovered = false;
   let runtime: AgentRuntime;
   registerBuiltins(registry, {
@@ -70,6 +76,8 @@ export async function createHarness(
     loadSkill: (name) => loadSkill(name, skills),
     record: (values) => runtime.record(values),
     discover: async (_query, signal) => {
+      // Local deferred tools remain discoverable when external execution is disabled.
+      if (permissions.mode === "read-only") return;
       if (discovered || !servers.length) return;
       await permissions.authorize(
         {
@@ -88,6 +96,24 @@ export async function createHarness(
       discovered = true;
     },
   });
+  let workflows;
+  try {
+    workflows = await createLocalWorkflows({
+      root,
+      registry,
+      provider,
+      architecture,
+      store,
+      permissions,
+      runtime: () => runtime,
+      emit,
+    });
+  } catch (error) {
+    await mcp.disconnect();
+    store.close();
+    throw error;
+  }
+  diagnostics.push(...workflows.diagnostics);
   runtime = new AgentRuntime({
     root,
     provider,
@@ -97,6 +123,10 @@ export async function createHarness(
     permissions,
     settings: config.context,
     onEvent: emit,
+    mode: options.mode,
+    instructions: workflows.instructions,
+    executeTool: workflows.executeTool,
+    serialTools: workflows.serialTools,
   });
   return {
     runtime,
@@ -104,8 +134,11 @@ export async function createHarness(
     mcp,
     registry,
     diagnostics,
-    run: (prompt: string, signal: AbortSignal, resume?: string): Promise<Session> =>
-      runtime.run(prompt, signal, resume),
+    run: async (prompt: string, signal: AbortSignal, resume?: string): Promise<Session> => {
+      const session = await runtime.run(prompt, signal, resume);
+      await savePlan(root, session);
+      return session;
+    },
     close: async () => {
       await mcp.disconnect();
       store.close();

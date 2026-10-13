@@ -106,6 +106,7 @@ async function fixture(
     mode: options.mode,
     instructions: workflows.instructions,
     executeTool: workflows.executeTool,
+    serialTools: workflows.serialTools,
     settings: { maxTurns: 6 },
     onEvent: (event) => {
       events.push(event);
@@ -115,6 +116,83 @@ async function fixture(
 }
 
 describe("local workflow runtime integration", () => {
+  test("reloads external instructions and hooks when the same runtime resumes", async () => {
+    const f = await fixture(
+      (_request, turn) => (turn === 1 ? [call("files_read", { path: "source.ts" })] : answer()),
+      { files: { "AGENTS.md": "First instruction", "source.ts": "original" } },
+    );
+    const first = await f.runtime.run("Inspect.", signal());
+    await writeFile(join(f.root, "AGENTS.md"), "Updated instruction");
+    await writeFile(
+      join(f.root, ".vcli/hooks.json"),
+      JSON.stringify({
+        version: 1,
+        beforeTool: [
+          { name: "reloaded", tools: ["files_read"], command: "printf reloaded > hook-ran" },
+        ],
+      }),
+    );
+    await f.runtime.run("Inspect again.", signal(), first.id);
+    expect(f.requests[1]!.system).toContain("Updated instruction");
+    expect(f.requests[1]!.system).not.toContain("First instruction");
+    expect(await readFile(join(f.root, "hook-ran"), "utf8")).toBe("reloaded");
+  });
+
+  test("command hooks serialize otherwise independent reads", async () => {
+    const f = await fixture(
+      (_request, turn) =>
+        turn === 0
+          ? [
+              call("files_read", { path: "source.ts" }, "one"),
+              call("files_read", { path: "source.ts" }, "two"),
+            ]
+          : answer(),
+      {
+        files: {
+          "source.ts": "original",
+          ".vcli/hooks.json": JSON.stringify({
+            version: 1,
+            beforeTool: [
+              {
+                name: "lock",
+                tools: ["files_read"],
+                command: "mkdir hook-lock || exit 9; sleep 0.02",
+              },
+            ],
+            afterTool: [{ name: "unlock", tools: ["files_read"], command: "rmdir hook-lock" }],
+          }),
+        },
+      },
+    );
+    await f.runtime.run("Read twice.", signal());
+    const results = f.events.filter((event) => event.type === "tool-end");
+    expect(results).toHaveLength(2);
+    expect(results.every((event) => !event.data.isError)).toBe(true);
+  });
+
+  test("plan previews a component graph without changing the intended architecture document", async () => {
+    const f = await fixture(
+      (_request, turn) =>
+        turn === 0
+          ? [
+              call("architecture_preview", {
+                design: {
+                  version: 1,
+                  components: [{ id: "api", label: "Planned API", paths: ["api/"] }],
+                  decisions: ["Keep boundaries explicit"],
+                },
+              }),
+            ]
+          : answer(),
+      { mode: "plan" },
+    );
+    const session = await f.runtime.run("Plan a component.", signal());
+    expect(session.mode).toBe("plan");
+    const event = f.events.find((event) => event.type === "tool-end")!;
+    expect(event.data.isError).toBe(false);
+    expect(JSON.stringify(event.data.details)).toContain("Planned API");
+    await expect(readFile(join(f.root, ".vcli/architecture.json"))).rejects.toThrow();
+  });
   test("loads project instructions into inference and discovers memory without eager schema cost", async () => {
     const f = await fixture(
       (request, turn) => {
