@@ -30,7 +30,7 @@ interface CommandOptions {
   activity(text: string): void;
   refresh(): Promise<void>;
   changeView(view: GraphView): Promise<void>;
-  close(): void;
+  close(): void | Promise<void>;
   stopTask(): void;
   changeLayout(layout: WorkspaceLayout): void;
   restoreSession(session: Session): void;
@@ -161,7 +161,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
         throw new Error("Opening another project is unavailable in this workspace.");
       await props.openProject(path.trim());
       connection.clear();
-      options.close();
+      await options.close();
     } catch (error) {
       feedback(error instanceof Error ? error.message : "Could not open this project.");
     } finally {
@@ -202,7 +202,8 @@ export function createWorkspaceCommands(options: CommandOptions) {
     }
     const [name, ...args] = prompt.split(/\s+/);
     if (await workflows.execute(name!, args)) return true;
-    if (name === "/stop") options.stopTask();
+    if (name === "/exit" || name === "/quit") await options.close();
+    else if (name === "/stop") options.stopTask();
     else if (name === "/help" || name === "/commands") open("help");
     else if (name === "/connect") open("connect");
     else if (name === "/tokens") open("tokens");

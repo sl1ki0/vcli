@@ -22,6 +22,7 @@ export function createChatTask(options: TaskOptions) {
     finish(allow: ApprovalDecision): void;
   }>();
   let controller: AbortController | undefined;
+  let completion = Promise.resolve();
   const requestApproval = (
     tool: ToolDefinition,
     args: Record<string, unknown>,
@@ -29,7 +30,7 @@ export function createChatTask(options: TaskOptions) {
     remember = true,
   ) =>
     new Promise<ApprovalDecision>((resolve) => {
-      if (signal?.aborted) return resolve(false);
+      if (signal?.aborted || controller?.signal.aborted) return resolve(false);
       const actions = remember
         ? approvalActions
         : approvalActions.filter((action) => action.decision !== "always");
@@ -53,6 +54,10 @@ export function createChatTask(options: TaskOptions) {
     if (running() || !options.workspace.run) return;
     controller = new AbortController();
     const current = controller;
+    let settled!: () => void;
+    completion = new Promise<void>((resolve) => {
+      settled = resolve;
+    });
     setRunning(true);
     options.conversation.send(prompt);
     options.activity("Message sent. Waiting for model…");
@@ -88,8 +93,17 @@ export function createChatTask(options: TaskOptions) {
       setRunning(false);
       setApproval(undefined);
       controller = undefined;
-      await options.refresh();
+      try {
+        await options.refresh();
+      } finally {
+        settled();
+      }
     }
+  }
+  async function cancelAndWait() {
+    const pending = completion;
+    cancel();
+    await pending;
   }
   function cancel() {
     if (!controller || controller.signal.aborted) return;
@@ -126,6 +140,7 @@ export function createChatTask(options: TaskOptions) {
     approval,
     start,
     cancel,
+    cancelAndWait,
     approve,
     moveApproval,
     confirmApproval,

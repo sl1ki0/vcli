@@ -1,3 +1,4 @@
+import { exitSmoke } from "../scripts/smoke-exit.ts";
 import { cancellationSmoke } from "../scripts/smoke-cancel.ts";
 import { livePermissionsSmoke } from "../scripts/smoke-live-permissions.ts";
 import { expect, test } from "bun:test";
@@ -75,5 +76,18 @@ test("real terminal cancels stalled requests, partial streams and approvals, the
     stopCommand: true,
     partialPersisted: true,
     chatReusable: true,
+  });
+}, 50_000);
+
+test("real terminal exit commands cancel active work, persist history and restore the shell", async () => {
+  expect(
+    await exitSmoke([process.execPath, resolve(import.meta.dir, "../apps/cli/src/index.ts")]),
+  ).toEqual({
+    requests: 2,
+    idleExit: true,
+    streamingQuit: true,
+    approvalExit: true,
+    partialPersisted: true,
+    terminalRestored: true,
   });
 }, 50_000);

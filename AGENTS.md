@@ -78,7 +78,8 @@
 - Graph -> LayoutScene -> SVG -> PNG -> OpenTUI image. Shared render/hit geometry,
   independent repaint, tree fallback. Keep observed/intended/change graphs separate.
 - Ctrl+C uses physical-key metadata across layouts; /stop and Stop also cancel
-  active tasks, preserving partial history and keeping chat reusable.
+  active tasks, preserving partial history and keeping chat reusable. /exit and
+  /quit cancel and drain active work before closing the terminal.
 - F2 /chat, /split, F3 architecture; expose /history /new /connect /tokens
   /reasoning and workflow commands. Navigation/settings/history make no model calls.
 - Prompt slash suggestions share /help's catalog; arrows select, Tab completes,

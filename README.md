@@ -181,7 +181,8 @@ finish normally. Plan mode still forbids edits, commands, hooks and MCP startup.
 **Ctrl+C** stops the active task and keeps the chat open. Extended terminal keyboard
 protocols use the physical C key across layouts. You can also type `/stop` or click
 **Stop** above the chat. Partial responses remain in history; send a new message to
-continue. When no task is running, Ctrl+C exits.
+continue. When no task is running, Ctrl+C exits. `/exit` and `/quit` close the CLI;
+if a task is active, they cancel it and wait for its cleanup before exiting.
 Configuration and navigation use no model calls. `/tokens` edits the
 context window, prompt/result/schema/map ceilings, response reserve and task budget.
 `/reasoning` chooses `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
