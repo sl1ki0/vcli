@@ -29,6 +29,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   const [touched, setTouched] = createSignal<Set<string>>(new Set());
   const conversation = createConversation(props.initialSession, props.readArtifact);
   const [approvalCommand, setApprovalCommand] = createSignal(false);
+  const [closing, setClosing] = createSignal(false);
   let refreshBusy = false;
   let approvalScroll: ScrollBoxRenderable | undefined;
   const narrow = createMemo(() => dimensions().width < 110);
@@ -53,7 +54,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       setView(view() === "observed" ? "intended" : view() === "intended" ? "changes" : "observed");
       void refresh();
     },
-    close: () => renderer.destroy(),
+    close: closeWorkspace,
   });
   const focus = createWorkspaceFocus({ navigation, conversation, dimensions });
   const commands = createWorkspaceCommands({
@@ -68,7 +69,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       setView(next);
       await refresh();
     },
-    close: () => renderer.destroy(),
+    close: closeWorkspace,
     changeLayout: focus.changeLayout,
     restoreSession: (session) => {
       setPreview(undefined);
@@ -197,6 +198,14 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     if (event.type === "subagent")
       setActivity(`Subagent: ${event.data.status ?? event.data.type ?? "exploring"}`);
   }
+  async function closeWorkspace() {
+    if (closing()) return;
+    setClosing(true);
+    const stopped = task.cancelAndWait();
+    setActivity("Exiting… waiting for the active task to stop.");
+    await stopped;
+    renderer.destroy();
+  }
   function stopTask() {
     if (!task.running()) {
       setActivity("No active task.");
@@ -206,6 +215,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     focus.returnToInput();
   }
   async function submit(prompt: string) {
+    if (closing()) return;
     if (commands.working()) {
       setActivity("Updating the workspace. Please wait for it to finish.");
       return;
@@ -241,11 +251,16 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     await task.start(prompt.trim());
   }
   useKeyboard((key) => {
+    if (closing()) {
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
     if (matchesControlKey(key, "c")) {
       key.preventDefault();
       key.stopPropagation();
       if (task.running()) stopTask();
-      else renderer.destroy();
+      else void closeWorkspace();
       return;
     }
     if (matchesControlKey(key, "p")) {

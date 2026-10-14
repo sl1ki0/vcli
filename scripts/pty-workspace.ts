@@ -116,8 +116,8 @@ export function createWorkspaceTerminal(options: TerminalOptions) {
     await waitFor(nextLabel, offset);
   }
 
-  async function quit() {
-    const offset = write("\u0003");
+  async function quit(command?: "/exit" | "/quit") {
+    const offset = write(command ? `\u0005\u0015${command}\r` : "\u0003");
     await waitFor("\u001b[?1049l", offset);
     const code = await child.exited;
     if (code) throw failure(`Workspace client exited with ${code}`);

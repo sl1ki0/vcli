@@ -6,6 +6,7 @@ import { onboardingSmoke } from "./smoke-onboarding.ts";
 import { resourceLimitsSmoke } from "./smoke-resource-limits.ts";
 import { chatSmoke } from "./smoke-chat.ts";
 import { workflowsSmoke } from "./smoke-workflows.ts";
+import { exitSmoke } from "./smoke-exit.ts";
 import { cancellationSmoke } from "./smoke-cancel.ts";
 import { livePermissionsSmoke } from "./smoke-live-permissions.ts";
 import { approvalSmoke } from "./smoke-approval.ts";
@@ -67,6 +68,7 @@ try {
   await approvalSmoke(binary);
   await livePermissionsSmoke(binary);
   await cancellationSmoke(binary);
+  await exitSmoke(binary);
   await toolHistorySmoke(binary);
   await homeworkSmoke(binary);
   await resourceLimitsSmoke(binary);

@@ -825,6 +825,63 @@ describe("conversation workspace", () => {
       setup.renderer.destroy();
     }
   });
+  test.each(["/exit", "/quit"])("%s exits without model calls when idle", async (command) => {
+    let calls = 0;
+    const setup = await render({
+      run: async () => {
+        calls++;
+        return session;
+      },
+    });
+    try {
+      await submit(setup, command);
+      expect(setup.renderer.isDestroyed).toBe(true);
+      expect(calls).toBe(0);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+  test.each(["/exit", "/quit"])(
+    "%s waits for active task cleanup before closing",
+    async (command) => {
+      let signal: AbortSignal | undefined;
+      let release!: () => void;
+      const cleanup = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let calls = 0;
+      const setup = await render({
+        run: async (_prompt, current, emit) => {
+          calls++;
+          signal = current;
+          await emit(event("text", { text: "Active task waiting" }));
+          await new Promise<void>((resolve) =>
+            current.addEventListener("abort", () => resolve(), { once: true }),
+          );
+          await cleanup;
+          return { ...session, status: "aborted" };
+        },
+      });
+      const destroyed = new Promise<void>((resolve) => setup.renderer.once("destroy", resolve));
+      try {
+        setup.mockInput.pressKey("F2");
+        await setup.flush();
+        await submit(setup, "Start a task");
+        await setup.waitForFrame((frame) => frame.includes("Active task waiting"));
+        await submit(setup, command);
+        expect(signal?.aborted).toBe(true);
+        expect(setup.renderer.isDestroyed).toBe(false);
+        await submit(setup, "No new work during exit");
+        expect(calls).toBe(1);
+        release();
+        await destroyed;
+        expect(setup.renderer.isDestroyed).toBe(true);
+      } finally {
+        release();
+        setup.renderer.destroy();
+      }
+    },
+  );
   test("Ctrl+C honors the physical key reported with a non-Latin keyboard layout", async () => {
     let activeSignal: AbortSignal | undefined;
     const setup = await render({
