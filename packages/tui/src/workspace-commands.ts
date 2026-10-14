@@ -88,8 +88,8 @@ export function createWorkspaceCommands(options: CommandOptions) {
     setPanel(undefined);
     setMessage("");
   }
-  function canChange() {
-    if (!options.running() && !working() && !history.selecting()) return true;
+  function canChange(livePermission = false) {
+    if ((livePermission || !options.running()) && !working() && !history.selecting()) return true;
     feedback("Stop the active task before changing settings or opening another project.");
     return false;
   }
@@ -99,12 +99,11 @@ export function createWorkspaceCommands(options: CommandOptions) {
       return;
     }
     if (
-      ["connect", "tokens", "permission", "reasoning", "history", "open", "config"].includes(
-        kind,
-      ) &&
+      ["connect", "tokens", "reasoning", "history", "open", "config"].includes(kind) &&
       !canChange()
     )
       return;
+    if (kind === "permission" && !canChange(true)) return;
     connection.clear();
     ++readVersion;
     setMessage("");
@@ -116,7 +115,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
     if (kind === "history") void history.load();
   }
   async function apply(update: WorkspaceSettingsUpdate) {
-    if (!canChange()) throw new Error("Active task must finish first.");
+    if (!canChange(update.kind === "permission")) throw new Error("Active task must finish first.");
     if (!props.configure) throw new Error("Settings are unavailable in this workspace.");
     setWorking(true);
     try {
@@ -133,7 +132,9 @@ export function createWorkspaceCommands(options: CommandOptions) {
       options.activity(
         update.kind === "connection" && settings()?.credential === "missing"
           ? "Provider/model saved. No API key found; use /connect to add one before starting a task."
-          : `${label}. Project settings updated.`,
+          : update.kind === "permission"
+            ? `Permission mode: ${update.permission.toUpperCase()}. Applies to the active task and future tasks.`
+            : `${label}. Project settings updated.`,
       );
     } finally {
       setWorking(false);
@@ -219,7 +220,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
     } else if (name === "/new") await history.create();
     else if (name === "/config") open("config");
     else if (name === "/status") open("status");
-    else if (name === "/permission") {
+    else if (name === "/permission" || name === "/permissions") {
       const mode = args[0];
       if (mode && ["yolo", "ask", "read-only"].includes(mode))
         await setPermission(mode as PermissionMode);

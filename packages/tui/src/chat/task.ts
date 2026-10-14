@@ -22,11 +22,24 @@ export function createChatTask(options: TaskOptions) {
     finish(allow: ApprovalDecision): void;
   }>();
   let controller: AbortController | undefined;
-  const requestApproval = (tool: ToolDefinition, args: Record<string, unknown>, remember = true) =>
-    new Promise<ApprovalDecision>((finish) => {
+  const requestApproval = (
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    remember = true,
+  ) =>
+    new Promise<ApprovalDecision>((resolve) => {
+      if (signal?.aborted) return resolve(false);
       const actions = remember
         ? approvalActions
         : approvalActions.filter((action) => action.decision !== "always");
+      const finish = (decision: ApprovalDecision) => {
+        signal?.removeEventListener("abort", cancelRequest);
+        if (approval()?.finish === finish) setApproval(undefined);
+        resolve(decision);
+      };
+      const cancelRequest = () => finish(false);
+      signal?.addEventListener("abort", cancelRequest, { once: true });
       setApproval({
         request: presentToolRequest(tool, args),
         actions,
@@ -35,7 +48,7 @@ export function createChatTask(options: TaskOptions) {
       });
     });
   const requestOneTimeApproval = (tool: ToolDefinition, args: Record<string, unknown>) =>
-    requestApproval(tool, args, false).then((decision) => decision === true);
+    requestApproval(tool, args, undefined, false).then((decision) => decision === true);
   async function start(prompt: string) {
     if (running() || !options.workspace.run) return;
     controller = new AbortController();
@@ -85,7 +98,6 @@ export function createChatTask(options: TaskOptions) {
   }
   function approve(allow: ApprovalDecision) {
     approval()?.finish(allow);
-    setApproval(undefined);
   }
   function moveApproval(direction: number, wrap = false) {
     setApproval((pending) => {

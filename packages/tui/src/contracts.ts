@@ -85,7 +85,11 @@ export interface WorkspaceOptions {
     prompt: string,
     signal: AbortSignal,
     emit: (event: RuntimeEvent) => void | Promise<void>,
-    approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<ApprovalDecision>,
+    approve: (
+      tool: ToolDefinition,
+      args: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => Promise<ApprovalDecision>,
   ) => Promise<Session>;
 }
 export type WorkspaceInspection =

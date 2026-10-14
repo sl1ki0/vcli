@@ -142,13 +142,26 @@ export class ToolRegistry {
 export class PermissionGate {
   private binding?: { session: Session; save: () => Promise<void> };
   private authorization = Promise.resolve();
+  private modeChange = new AbortController();
   constructor(
-    readonly mode: PermissionMode,
+    private currentMode: PermissionMode,
     private readonly approve?: (
       tool: ToolDefinition,
       args: Record<string, unknown>,
+      signal?: AbortSignal,
     ) => Promise<ApprovalDecision>,
   ) {}
+  get mode(): PermissionMode {
+    return this.currentMode;
+  }
+  /** Re-evaluate pending approvals without replaying or interrupting executed tools. */
+  setMode(mode: PermissionMode): void {
+    if (mode === this.currentMode) return;
+    this.currentMode = mode;
+    const previous = this.modeChange;
+    this.modeChange = new AbortController();
+    previous.abort();
+  }
   /** Refresh for every run; durable grants are scoped to this session and project. */
   bindSession(session: Session, save: () => Promise<void>): void {
     this.binding = { session, save };
@@ -175,6 +188,7 @@ export class PermissionGate {
   ): Promise<void> {
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
     this.checkPolicy(tool, binding);
+    if (this.mode === "yolo") return;
     const contract = () =>
       JSON.stringify({
         name: tool.name,
@@ -188,6 +202,7 @@ export class PermissionGate {
     );
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
     this.checkPolicy(tool, binding);
+    if (this.currentMode === "yolo") return;
     const schemaDigest = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
     const grant = binding && {
       sessionId: binding.session.id,
@@ -208,7 +223,20 @@ export class PermissionGate {
       )
     )
       return;
-    const decision = await this.approve?.(tool, args);
+    const change = this.modeChange.signal;
+    let onChange!: () => void;
+    const modeChanged = new Promise<undefined>((resolve) => {
+      onChange = () => resolve(undefined);
+      change.addEventListener("abort", onChange, { once: true });
+    });
+    let decision: ApprovalDecision | undefined;
+    try {
+      decision = await Promise.race([this.approve?.(tool, args, change), modeChanged]);
+    } finally {
+      change.removeEventListener("abort", onChange);
+    }
+    // The UI may resolve its canceled card before the mode-change race settles.
+    if (change.aborted) return this.authorizeAsk(tool, args, binding);
     if (decision !== true && decision !== "always")
       throw new Error(`Approval denied for ${tool.name}.`);
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");

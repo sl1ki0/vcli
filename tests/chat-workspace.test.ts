@@ -1,3 +1,4 @@
+import { livePermissionsSmoke } from "../scripts/smoke-live-permissions.ts";
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { chatSmoke } from "../scripts/smoke-chat.ts";
@@ -41,5 +42,20 @@ test("real terminal chat echoes prompts, renders Markdown, switches conversation
     formattedChat: true,
     persistedHistory: true,
     terminalRestored: true,
+  });
+}, 50_000);
+
+test("real terminal changes permissions during pending approvals and active inference", async () => {
+  expect(
+    await livePermissionsSmoke([
+      process.execPath,
+      resolve(import.meta.dir, "../apps/cli/src/index.ts"),
+    ]),
+  ).toEqual({
+    requests: 6,
+    pendingYoloReleased: true,
+    liveAskGates: true,
+    liveReadOnlyDenies: true,
+    planPreserved: true,
   });
 }, 50_000);

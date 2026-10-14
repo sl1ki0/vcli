@@ -64,54 +64,48 @@ export function Workspace(props: WorkspaceOptions) {
       </box>
       <box height={state.bodyHeight()} flexShrink={0} flexDirection="column">
         <Show
-          when={state.approval()}
+          when={state.commands.panel()}
           fallback={
-            <>
-              <Show
-                when={state.commands.panel()}
-                fallback={
-                  <>
-                    <Show when={state.layout() !== "chat"}>
-                      <ArchitectureView state={state} root={props.root} />
-                    </Show>
-                    <Show when={state.layout() !== "architecture"}>
-                      <box height={state.chatHeight()} flexShrink={0}>
-                        <ChatTranscript
-                          conversation={state.conversation}
-                          focused={state.chatFocus()}
-                          running={state.running()}
-                          onFocus={state.focusChat}
-                          onScrollRef={state.setChatScroll}
-                        />
-                      </box>
-                    </Show>
-                  </>
-                }
-              >
-                <WorkspacePanels
-                  commands={state.commands}
-                  root={props.root}
-                  running={state.running()}
+            <Show
+              when={state.approval()}
+              fallback={
+                <>
+                  <Show when={state.layout() !== "chat"}>
+                    <ArchitectureView state={state} root={props.root} />
+                  </Show>
+                  <Show when={state.layout() !== "architecture"}>
+                    <box height={state.chatHeight()} flexShrink={0}>
+                      <ChatTranscript
+                        conversation={state.conversation}
+                        focused={state.chatFocus()}
+                        running={state.running()}
+                        onFocus={state.focusChat}
+                        onScrollRef={state.setChatScroll}
+                      />
+                    </box>
+                  </Show>
+                </>
+              }
+            >
+              {(approval) => (
+                <ToolApproval
+                  request={approval().request}
+                  selected={approval().selected}
+                  actions={approval().actions}
+                  onDecision={state.approve}
+                  onScrollRef={state.setApprovalScroll}
                 />
-              </Show>
-            </>
+              )}
+            </Show>
           }
         >
-          {(approval) => (
-            <ToolApproval
-              request={approval().request}
-              selected={approval().selected}
-              actions={approval().actions}
-              onDecision={state.approve}
-              onScrollRef={state.setApprovalScroll}
-            />
-          )}
+          <WorkspacePanels commands={state.commands} root={props.root} running={state.running()} />
         </Show>
       </box>
       <box height={2} flexShrink={0} paddingLeft={1} flexDirection="column">
         <text fg={state.approval() ? "#fbbf24" : "#8e9ba9"}>
           {state.approval()
-            ? "Waiting for your permission · review the action above"
+            ? "Waiting for your permission · / to type a command · Ctrl+P changes mode"
             : state.activity().slice(-500)}
         </text>
       </box>
@@ -126,8 +120,12 @@ export function Workspace(props: WorkspaceOptions) {
             ref={state.setInputRef}
             value={state.inputValue()}
             onInput={state.setInputValue}
-            focused={!state.canvasFocus() && !state.chatFocus() && !state.approval()}
-            onMouseDown={state.returnToInput}
+            focused={
+              !state.canvasFocus() &&
+              !state.chatFocus() &&
+              (!state.approval() || state.approvalCommand())
+            }
+            onMouseDown={state.beginApprovalCommand}
             placeholder={
               state.searching()
                 ? "Search modules…"
@@ -150,7 +148,8 @@ export function Workspace(props: WorkspaceOptions) {
         fg="#64748b"
         onMouseDown={() => state.commands.open("help")}
       >
-        F1 Help · F2 chat · F3 architecture · /history · /reasoning · Tab focus · Ctrl+C stop
+        F1 Help · F2 chat · F3 architecture · Ctrl+P permissions · /history · Tab focus · Ctrl+C
+        stop
       </text>
     </box>
   );

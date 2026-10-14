@@ -27,6 +27,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   );
   const [touched, setTouched] = createSignal<Set<string>>(new Set());
   const conversation = createConversation(props.initialSession, props.readArtifact);
+  const [approvalCommand, setApprovalCommand] = createSignal(false);
   let refreshBusy = false;
   let approvalScroll: ScrollBoxRenderable | undefined;
   const narrow = createMemo(() => dimensions().width < 110);
@@ -84,11 +85,14 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       focus.returnToInput();
     },
   });
+  createEffect(() => {
+    if (!task.approval()) setApprovalCommand(false);
+  });
   const completion = createCommandCompletion({
     input: focus.inputValue,
     enabled: () =>
       !commands.panel() &&
-      !task.approval() &&
+      (!task.approval() || approvalCommand()) &&
       !navigation.searching() &&
       !navigation.canvasFocus() &&
       !focus.chatFocus(),
@@ -205,6 +209,11 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     if (prompt.trim().startsWith("/")) {
       focus.clearInput();
       await commands.execute(prompt);
+      setApprovalCommand(false);
+      return;
+    }
+    if (task.approval()) {
+      setActivity("Use /permission yolo, /permission ask or /permission read-only. Draft kept.");
       return;
     }
     if (task.running()) {
@@ -228,7 +237,31 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       else renderer.destroy();
       return;
     }
-    if (task.approval()) {
+    if (key.ctrl && key.name === "p") {
+      key.preventDefault();
+      key.stopPropagation();
+      commands.open("permission");
+      return;
+    }
+    if (commands.panel()) {
+      commands.handleKey(key);
+      return;
+    }
+    if (task.approval() && !approvalCommand() && key.sequence === "/") {
+      key.preventDefault();
+      key.stopPropagation();
+      setApprovalCommand(true);
+      focus.returnToInput();
+      focus.replaceInput("/");
+      return;
+    }
+    if (task.approval() && approvalCommand() && key.name === "escape") {
+      key.preventDefault();
+      key.stopPropagation();
+      setApprovalCommand(false);
+      return;
+    }
+    if (task.approval() && !approvalCommand()) {
       key.preventDefault();
       key.stopPropagation();
       if (key.name === "escape") task.approve(false);
@@ -258,6 +291,11 @@ export function useWorkspaceState(props: WorkspaceOptions) {
   });
   return {
     commands,
+    approvalCommand,
+    beginApprovalCommand: () => {
+      if (task.approval()) setApprovalCommand(true);
+      focus.returnToInput();
+    },
     completion,
     view,
     usage,
