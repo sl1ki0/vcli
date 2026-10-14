@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import {
   CodeRenderable,
+  parseKeypress,
   InputRenderable,
   ScrollBoxRenderable,
   type BaseRenderable,
@@ -820,6 +821,38 @@ describe("conversation workspace", () => {
       await submit(setup, "/new");
       await setup.waitForFrame((value) => value.includes("New conversation."));
       expect(setup.captureCharFrame()).not.toContain("Failed prompt remains");
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+  test("Ctrl+C honors the physical key reported with a non-Latin keyboard layout", async () => {
+    let activeSignal: AbortSignal | undefined;
+    const setup = await render({
+      run: async (_prompt, signal, emit) => {
+        activeSignal = signal;
+        await emit(event("text", { text: "Waiting for cancellation" }));
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        return { ...session, status: "aborted" };
+      },
+    });
+    try {
+      setup.mockInput.pressKey("F2");
+      await setup.flush();
+      await submit(setup, "Stop this response");
+      await setup.waitForFrame((frame) => frame.includes("Waiting for cancellation"));
+      setup.mockInput.pressTab();
+      await setup.flush();
+      expect(input(setup).focused).toBe(false);
+      const key = parseKeypress("\u001b[1089::99;5u", { useKittyKeyboard: true });
+      expect(key?.name).toBe("с");
+      expect(key?.baseCode).toBe(99);
+      setup.renderer.keyInput.processParsedKey(key!);
+      await setup.flush();
+      expect(activeSignal?.aborted).toBe(true);
+      await setup.waitForFrame((frame) => frame.includes("Canceled"));
+      expect(input(setup).focused).toBe(true);
     } finally {
       setup.renderer.destroy();
     }

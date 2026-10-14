@@ -74,6 +74,7 @@ export function createChatTask(options: TaskOptions) {
             ? "failed"
             : "complete";
       options.conversation.finish(session, status);
+      if (status === "aborted") options.activity("Task canceled. You can send a new message.");
     } catch (error) {
       options.conversation.finish(undefined, current.signal.aborted ? "aborted" : "failed");
       options.activity(
@@ -91,6 +92,7 @@ export function createChatTask(options: TaskOptions) {
     }
   }
   function cancel() {
+    if (!controller || controller.signal.aborted) return;
     approval()?.finish(false);
     setApproval(undefined);
     controller?.abort();

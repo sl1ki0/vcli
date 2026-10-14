@@ -178,6 +178,10 @@ agent's permissions immediately after saving; `/permissions` is an alias. During
 an approval, press **/** to type a command or **Ctrl+P** to open the permission menu.
 YOLO releases the pending approval; read-only denies it. Actions already executing
 finish normally. Plan mode still forbids edits, commands, hooks and MCP startup.
+**Ctrl+C** stops the active task and keeps the chat open. Extended terminal keyboard
+protocols use the physical C key across layouts. You can also type `/stop` or click
+**Stop** above the chat. Partial responses remain in history; send a new message to
+continue. When no task is running, Ctrl+C exits.
 Configuration and navigation use no model calls. `/tokens` edits the
 context window, prompt/result/schema/map ceilings, response reserve and task budget.
 `/reasoning` chooses `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`

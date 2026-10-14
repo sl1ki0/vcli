@@ -33,6 +33,7 @@ export const workspaceCommandList = [
   { command: "/changes", description: "Show changes since opening this project" },
   { command: "/scan", description: "Refresh source architecture" },
   { command: "/rewind", description: "Restore a file checkpoint by ID" },
+  { command: "/stop", description: "Cancel the active response or tool without closing chat" },
   { command: "/help", description: "Open the command menu (F1)" },
   { command: "/commands", description: "Open the command menu" },
 ] as const;

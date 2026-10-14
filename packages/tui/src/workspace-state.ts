@@ -10,6 +10,7 @@ import { createWorkspaceFocus } from "./workspace-focus.ts";
 import { createArchitectureCanvas } from "./architecture-canvas.ts";
 import { createConversation } from "./chat/conversation.ts";
 import { createChatTask } from "./chat/task.ts";
+import { matchesControlKey } from "./keyboard-shortcuts.ts";
 import { createCommandCompletion } from "./chat/command-completion.ts";
 
 /** Assemble presentation controllers; each owns one independent interaction surface. */
@@ -60,6 +61,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     graph,
     running: task.running,
     approve: task.requestOneTimeApproval,
+    stopTask,
     activity: setActivity,
     refresh: () => refresh(),
     changeView: async (next) => {
@@ -195,6 +197,14 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     if (event.type === "subagent")
       setActivity(`Subagent: ${event.data.status ?? event.data.type ?? "exploring"}`);
   }
+  function stopTask() {
+    if (!task.running()) {
+      setActivity("No active task.");
+      return;
+    }
+    task.cancel();
+    focus.returnToInput();
+  }
   async function submit(prompt: string) {
     if (commands.working()) {
       setActivity("Updating the workspace. Please wait for it to finish.");
@@ -231,13 +241,14 @@ export function useWorkspaceState(props: WorkspaceOptions) {
     await task.start(prompt.trim());
   }
   useKeyboard((key) => {
-    if (key.ctrl && key.name === "c") {
+    if (matchesControlKey(key, "c")) {
       key.preventDefault();
-      if (task.running()) task.cancel();
+      key.stopPropagation();
+      if (task.running()) stopTask();
       else renderer.destroy();
       return;
     }
-    if (key.ctrl && key.name === "p") {
+    if (matchesControlKey(key, "p")) {
       key.preventDefault();
       key.stopPropagation();
       commands.open("permission");
@@ -315,6 +326,7 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       canvas.selectAt(event);
     },
     running: task.running,
+    stopTask,
     approval: task.approval,
     approve: task.approve,
     setApprovalScroll: (scroll: ScrollBoxRenderable) => {

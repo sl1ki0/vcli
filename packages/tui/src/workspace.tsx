@@ -55,6 +55,11 @@ export function Workspace(props: WorkspaceOptions) {
         <text fg="#38bdf8" onMouseDown={() => state.commands.open("reasoning")}>
           Reasoning
         </text>
+        <Show when={state.running()}>
+          <text fg="#fbbf24" onMouseDown={state.stopTask}>
+            Stop · Ctrl+C
+          </text>
+        </Show>
         <Show when={state.narrow() && state.layout() !== "chat" && !state.commands.panel()}>
           <text
             height={1}
