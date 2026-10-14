@@ -6,3 +6,5 @@ export * from "./graph-diff.ts";
 export * from "./conversation.ts";
 export * from "./tool-history.ts";
 export * from "./delegation-budget.ts";
+export * from "./managed-contracts.ts";
+export * from "./managed-run.ts";
