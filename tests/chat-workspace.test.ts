@@ -1,3 +1,4 @@
+import { cancellationSmoke } from "../scripts/smoke-cancel.ts";
 import { livePermissionsSmoke } from "../scripts/smoke-live-permissions.ts";
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
@@ -57,5 +58,22 @@ test("real terminal changes permissions during pending approvals and active infe
     liveAskGates: true,
     liveReadOnlyDenies: true,
     planPreserved: true,
+  });
+}, 50_000);
+
+test("real terminal cancels stalled requests, partial streams and approvals, then reuses chat", async () => {
+  expect(
+    await cancellationSmoke([
+      process.execPath,
+      resolve(import.meta.dir, "../apps/cli/src/index.ts"),
+    ]),
+  ).toEqual({
+    requests: 5,
+    headersCanceled: true,
+    nonLatinShortcut: true,
+    approvalCanceled: true,
+    stopCommand: true,
+    partialPersisted: true,
+    chatReusable: true,
   });
 }, 50_000);

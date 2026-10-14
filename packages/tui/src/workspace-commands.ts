@@ -31,6 +31,7 @@ interface CommandOptions {
   refresh(): Promise<void>;
   changeView(view: GraphView): Promise<void>;
   close(): void;
+  stopTask(): void;
   changeLayout(layout: WorkspaceLayout): void;
   restoreSession(session: Session): void;
   clearConversation(): void;
@@ -201,7 +202,8 @@ export function createWorkspaceCommands(options: CommandOptions) {
     }
     const [name, ...args] = prompt.split(/\s+/);
     if (await workflows.execute(name!, args)) return true;
-    if (name === "/help" || name === "/commands") open("help");
+    if (name === "/stop") options.stopTask();
+    else if (name === "/help" || name === "/commands") open("help");
     else if (name === "/connect") open("connect");
     else if (name === "/tokens") open("tokens");
     else if (name === "/reasoning") {
