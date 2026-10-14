@@ -71,6 +71,7 @@ export async function interactive(
       current.config,
       sameProvider ? { apiKey: credential?.apiKey } : {},
     );
+    let activeHarness: Awaited<ReturnType<typeof createHarness>> | undefined;
     await startWorkspace({
       root: current.root,
       graph: current.graph,
@@ -79,7 +80,11 @@ export async function interactive(
       renderer: current.config.renderer,
       initialCommand,
       settings: await settings.snapshot(),
-      configure: settings.configure,
+      configure: async (update) => {
+        const snapshot = await settings.configure(update);
+        if (update.kind === "permission") activeHarness?.setPermission(snapshot.permission);
+        return snapshot;
+      },
       inspect: (topic) => inspectWorkspace(current.root, topic),
       readArtifact: async (id) => {
         const store = await SqliteSessionStore.open(current.root);
@@ -115,6 +120,9 @@ export async function interactive(
           approve,
           { ...settings.harnessOptions(), mode },
         );
+        activeHarness = harness;
+        // A settings write can finish while the harness is still being initialized.
+        harness.setPermission(settings.currentConfig().permission);
         try {
           const session = await harness.run(prompt, signal, sessionId);
           sessionId = session.id;
@@ -122,6 +130,7 @@ export async function interactive(
         } finally {
           // Keep failed or interrupted turns available to the next prompt, too.
           sessionId = harness.runtime.currentSession?.id ?? sessionId;
+          activeHarness = undefined;
           await harness.close();
         }
       },

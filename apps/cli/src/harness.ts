@@ -8,6 +8,7 @@ import {
   type Session,
   type ToolDefinition,
   type ApprovalDecision,
+  type PermissionMode,
 } from "@vcli/core";
 import { createProvider } from "@vcli/providers";
 import {
@@ -34,7 +35,11 @@ export async function createHarness(
   config: Config,
   architecture: ArchitectureService,
   emit?: (event: RuntimeEvent) => void | Promise<void>,
-  approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<ApprovalDecision>,
+  approve?: (
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<ApprovalDecision>,
   options: HarnessOptions = {},
 ) {
   if (!config.model)
@@ -140,6 +145,8 @@ export async function createHarness(
     mcp,
     registry,
     diagnostics,
+    setPermission: (permission: PermissionMode) =>
+      permissions.setMode(options.mode === "plan" ? "read-only" : permission),
     run: async (prompt: string, signal: AbortSignal, resume?: string): Promise<Session> => {
       const session = await runtime.run(prompt, signal, resume);
       await savePlan(root, session);

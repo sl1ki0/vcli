@@ -33,6 +33,8 @@
 - Authorize/validate before execution wrappers. Persist starts before effects,
   results before next mutation. Parallel reads; serialize writes/shell/hooks.
 - Reject invalid tool arguments before approval/start events; never coerce types.
+- /permission (/permissions, Ctrl+P) updates active gates after saving; YOLO releases
+  pending approval, read-only denies it; running actions finish. Plan still wins.
 - Ask-mode menus use arrows/Enter; remembered approvals persist before effects,
   scoped to conversation/project/tool contract. Plan/read-only always take precedence.
 - Stop after three repeated schema errors per tool; persist the guard across empty

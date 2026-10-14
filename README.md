@@ -134,24 +134,25 @@ stop the current task before another model request. Corrected arguments reset
 that tool's count. The stop survives a restart; send a new message to continue.
 Permission refusals and tool execution failures do not count toward this limit.
 
-| Key                      | Action                                    |
-| ------------------------ | ----------------------------------------- |
-| Tab                      | Cycle prompt, canvas and chat focus       |
-| Arrows / mouse click     | Select a module                           |
-| Shift + arrows           | Pan                                       |
-| `+` / `-`                | Zoom                                      |
-| Enter                    | Drill into a module or group              |
-| Space                    | Collapse a parent                         |
-| `v`                      | Observed → intended → changes             |
-| `/`                      | Search modules                            |
-| `t`                      | Toggle the side tree; cycle narrow panels |
-| Escape                   | Reset search, drill and viewport          |
-| `r`                      | Refresh from source                       |
-| Ctrl+C                   | Stop the current task; exit when idle     |
-| `q` while canvas focused | Exit                                      |
-| F1                       | Open the command menu                     |
-| F2                       | Toggle full chat and split view           |
-| F3                       | Toggle full architecture and split view   |
+| Key                      | Action                                        |
+| ------------------------ | --------------------------------------------- |
+| Tab                      | Cycle prompt, canvas and chat focus           |
+| Arrows / mouse click     | Select a module                               |
+| Shift + arrows           | Pan                                           |
+| `+` / `-`                | Zoom                                          |
+| Enter                    | Drill into a module or group                  |
+| Space                    | Collapse a parent                             |
+| `v`                      | Observed → intended → changes                 |
+| `/`                      | Search modules                                |
+| `t`                      | Toggle the side tree; cycle narrow panels     |
+| Escape                   | Reset search, drill and viewport              |
+| `r`                      | Refresh from source                           |
+| Ctrl+C                   | Stop the current task; exit when idle         |
+| `q` while canvas focused | Exit                                          |
+| F1                       | Open the command menu                         |
+| F2                       | Toggle full chat and split view               |
+| F3                       | Toggle full architecture and split view       |
+| Ctrl+P                   | Change permissions, including during approval |
 
 | Prompt commands                               | Purpose                                  |
 | --------------------------------------------- | ---------------------------------------- |
@@ -172,6 +173,11 @@ keeping your draft. **Enter** completes a partial command; press it again to run
 Fully typed commands run immediately on Enter. `/permission` and `/reasoning`
 also suggest their supported arguments. Click a suggestion to fill the prompt.
 Tab cycles focus when no suggestions are open. Suggestions use no model calls.
+`/permission yolo`, `/permission ask` and `/permission read-only` change the active
+agent's permissions immediately after saving; `/permissions` is an alias. During
+an approval, press **/** to type a command or **Ctrl+P** to open the permission menu.
+YOLO releases the pending approval; read-only denies it. Actions already executing
+finish normally. Plan mode still forbids edits, commands, hooks and MCP startup.
 Configuration and navigation use no model calls. `/tokens` edits the
 context window, prompt/result/schema/map ceilings, response reserve and task budget.
 `/reasoning` chooses `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`

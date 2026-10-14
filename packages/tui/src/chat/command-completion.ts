@@ -17,7 +17,7 @@ export function commandSuggestions(input: string): CommandSuggestion[] {
     const values =
       name === "/reasoning"
         ? reasoningChoices
-        : name === "/permission"
+        : ["/permission", "/permissions"].includes(name)
           ? [
               { value: "yolo", description: "Allow changes without approval" },
               { value: "ask", description: "Approve writes and commands" },
@@ -33,7 +33,9 @@ export function commandSuggestions(input: string): CommandSuggestion[] {
     .map((item) => ({
       value:
         item.command +
-        (["/permission", "/reasoning", "/open", "/rewind"].includes(item.command) ? " " : ""),
+        (["/permission", "/permissions", "/reasoning", "/open", "/rewind"].includes(item.command)
+          ? " "
+          : ""),
       description: item.description,
     }));
 }

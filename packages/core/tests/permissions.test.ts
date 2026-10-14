@@ -46,6 +46,85 @@ const write: ToolDefinition = {
 };
 
 describe("conversation tool approval", () => {
+  test("switching to YOLO releases pending and queued approvals without saving grants", async () => {
+    let requested!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    let approvalSignal: AbortSignal | undefined;
+    let approvals = 0;
+    let saves = 0;
+    const current = session();
+    const gate = new PermissionGate("ask", async (_tool, _args, signal) => {
+      approvals++;
+      approvalSignal = signal;
+      requested();
+      return new Promise<ApprovalDecision>(() => {});
+    });
+    gate.bindSession(current, async () => {
+      saves++;
+    });
+    const first = gate.authorize(write, {});
+    await waiting;
+    const second = gate.authorize(write, {});
+    gate.setMode("yolo");
+    await Promise.all([first, second]);
+    expect(approvalSignal?.aborted).toBe(true);
+    expect(approvals).toBe(1);
+    expect(saves).toBe(0);
+    expect(current.toolApprovals).toBeUndefined();
+    await gate.authorize(write, {});
+    expect(approvals).toBe(1);
+  });
+
+  test("live read-only revokes pending authorization and ask applies after YOLO", async () => {
+    let requested!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    let answer!: (value: ApprovalDecision) => void;
+    const gate = new PermissionGate("yolo", async () => {
+      requested();
+      return new Promise<ApprovalDecision>((resolve) => {
+        answer = resolve;
+      });
+    });
+    await gate.authorize(write, {});
+    gate.setMode("ask");
+    const pending = gate.authorize(write, {});
+    await waiting;
+    gate.setMode("read-only");
+    answer("always");
+    await expect(pending).rejects.toThrow("Read-only mode denies");
+    await expect(gate.authorize(write, {})).rejects.toThrow("Read-only mode denies");
+    await gate.authorize({ ...write, kind: "read" }, {});
+    gate.bindSession({ ...session(), mode: "plan" }, async () => {});
+    gate.setMode("yolo");
+    await expect(gate.authorize(write, {})).rejects.toThrow("Plan mode denies");
+  });
+
+  test("same-mode updates preserve the pending approval", async () => {
+    let requested!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    let answer!: (value: ApprovalDecision) => void;
+    let approvalSignal: AbortSignal | undefined;
+    const gate = new PermissionGate("ask", async (_tool, _args, signal) => {
+      approvalSignal = signal;
+      requested();
+      return new Promise<ApprovalDecision>((resolve) => {
+        answer = resolve;
+      });
+    });
+    const pending = gate.authorize(write, {});
+    await waiting;
+    gate.setMode("ask");
+    expect(approvalSignal?.aborted).toBe(false);
+    answer(true);
+    await pending;
+  });
+
   test("always grant survives restart, applies to later arguments, and contains no supplied secrets", async () => {
     const current = session();
     let snapshot: Session | undefined;
