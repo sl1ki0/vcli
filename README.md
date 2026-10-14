@@ -1,11 +1,35 @@
 # vcli
 
+[English](README.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md)
+
+English is the primary documentation. The Russian and Simplified Chinese READMEs
+translate this guide; command names, configuration keys and UI labels stay unchanged.
+The detailed guides under `docs/` are currently in English.
+
 An architecture-first coding agent. Explore the source graph, declare component
 boundaries, and watch a design become code in a terminal workspace.
 
 TypeScript · Bun · OpenTUI/Solid · SQLite · ELK · resvg
 
 ![Exported sample source architecture](docs/example-architecture.png)
+
+## What you can do
+
+- Explore **observed** source dependencies, declare an **intended** component design,
+  and inspect **changes** since opening the workspace. Check declared boundaries locally.
+- Work in streaming Markdown chat, switch between split and full-screen views,
+  resume saved conversations, and inspect durable tool cards and full result artifacts.
+- Plan without source edits, then explicitly enable implementation. Use persistent
+  tasks, project memory, guarded file checkpoints, tool hooks and read-only explorers.
+- Connect one of five provider adapters and choose the model, reasoning effort,
+  permission mode and token budgets explicitly.
+- Discover skills and MCP tools lazily, including supported components imported
+  from recognized plugin and marketplace formats.
+
+Source dependency analysis focuses on TypeScript and JavaScript using the Compiler
+API. Other recognized source files appear as file nodes; deeper language analysis
+is deferred. Architecture scanning, layout, navigation and export run locally
+without model calls. Coding conversations and model explorers use the selected API.
 
 ## Start
 
@@ -15,9 +39,13 @@ and **Connect provider**. Press **F1** for the command menu, or **Esc** to retur
 the prompt and type `/help`, `/open` or `/connect`. Each build includes a
 [quick-start guide](docs/artifact-quickstart.md).
 
-Install **Bun 1.3.13** and **ripgrep**, then:
+Downloaded builds are standalone; Bun is needed for source development.
+To run from source, install **Bun 1.3.13** and **ripgrep**, then:
 
 ```sh
+git clone https://github.com/sl1ki0/vcli.git
+cd vcli
+git switch codex/architecture-first-cli
 bun install --frozen-lockfile
 bun run dev --root fixtures/sample-project
 ```
@@ -125,9 +153,19 @@ Permission refusals and tool execution failures do not count toward this limit.
 | F2                       | Toggle full chat and split view           |
 | F3                       | Toggle full architecture and split view   |
 
-Prompt commands: `/help`, `/open`, `/connect`, `/tokens`, `/reasoning`, `/config`,
-`/permission`, `/status`, `/chat`, `/split`, `/architecture`, `/history`, `/sessions`,
-`/new`, `/plugins`, `/skills`, `/observed`, `/intended`, `/changes`, `/scan`.
+| Prompt commands                               | Purpose                                  |
+| --------------------------------------------- | ---------------------------------------- |
+| `/help`, `/commands`                          | Open the command menu                    |
+| `/open`, `/connect`, `/config`, `/status`     | Project, provider and settings           |
+| `/tokens`, `/reasoning`, `/permission`        | Budgets, model effort and permissions    |
+| `/chat`, `/split`, `/architecture`            | Workspace layout                         |
+| `/history`, `/sessions`, `/new`               | Saved and new conversations              |
+| `/observed`, `/intended`, `/changes`, `/scan` | Architecture views and refresh           |
+| `/plan`, `/build`, `/plans`                   | Planning, implementation and saved plans |
+| `/memory`, `/tasks`, `/hooks`                 | Inspect local workflow state             |
+| `/checkpoints`, `/rewind <id>`                | Inspect and restore captured file edits  |
+| `/plugins`, `/skills`                         | Inspect available extensions             |
+
 Type `/` in the prompt to see commands with descriptions; keep typing to filter.
 Use **↑/↓** to select, **Tab** to complete, and **Esc** to hide suggestions while
 keeping your draft. **Enter** completes a partial command; press it again to run.
@@ -175,8 +213,10 @@ evidence and exit with status 1 on violations.
 ```sh
 vcli run "Extract persistence into a storage component and verify the tests"
 vcli run "Inspect the module boundaries" --permission read-only --json
+vcli run "Plan the API boundary change" --plan --json
 vcli sessions list
 vcli sessions resume SESSION_ID "Continue and verify the result"
+vcli sessions resume PLAN_SESSION_ID "Implement the plan" --build
 ```
 
 `--json` emits newline-delimited runtime events without terminal escape sequences.
@@ -224,7 +264,7 @@ latency; live model completion rate and provider billing savings are not establi
 ## Skills, MCP and marketplaces
 
 Project skills are discovered in `.vcli/skills`, `.agents/skills`, `.claude/skills`,
-`.gemini/skills` and `.qwen/skills`. Portable Agent Plugins, Claude catalogs/packages,
+`.gemini/skills` and `.qwen/skills`. Recognized Agent Plugins, Claude catalogs/packages,
 Codex catalogs/packages, Gemini and Qwen extensions, and Qoder packages are
 normalized to supported skills and MCP servers. Vendor hooks, commands, agents and host UI features are reported as
 unsupported. Credentials and connected app accounts require separate integrations.
@@ -244,6 +284,8 @@ vcli plugins remove design
 ```
 
 Installs copy snapshots and record provenance. Hooks never run during installation.
+Sources are local directories or Git repositories. Archive/npm installation,
+standalone HTTP catalogs, legacy SSE and interactive OAuth are not supported.
 MCP stdio programs and HTTP connections start on discovery through the permission
 gate. Their schemas are deferred, arguments validated, and cancelled or uncertain
 calls are never retried. Supported transports are stdio and Streamable HTTP.
@@ -268,25 +310,70 @@ token accounting, checkpoint coverage and a feature support matrix. These are
 independent implementations of documented workflows; complete Claude Code parity
 is not claimed.
 
+Plan mode persists on resume and denies source edits, shell, hooks and MCP startup,
+even under YOLO. `/build` enables implementation under the configured permissions.
+Live draft preview restoration across restarts is still open. Automatic instruction
+loading covers root `AGENTS.md`, `CLAUDE.md` and `.vcli/MEMORY.md`, with a combined
+2,000-token allocation; nested instructions and imports are not interpreted.
+Explorers are read-only, limited to two concurrently, six turns each and a default
+12,000-token allocation from the parent's budget. Checkpoints cover native file
+edits, excluding shell, MCP, memory and design effects; they do not rewind chat.
+
+## Repository structure
+
+| Path                           | Responsibility                                                      |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `packages/core`                | Portable contracts, agent runtime, context, budgets and permissions |
+| `packages/architecture`        | Source analysis, intended design, drift, layout and SVG/PNG export  |
+| `packages/providers`           | Provider SDK adapters, normalized streams and continuation state    |
+| `packages/integrations`        | Plugin/catalog normalization, skills and lazy MCP clients           |
+| `packages/tui`                 | Workspace presentation, chat and navigation controllers             |
+| `apps/cli`                     | Commands, configuration, tools, local workflows and SQLite drivers  |
+| `scripts`, `tests`, `fixtures` | Build, smoke, benchmarks and offline verification                   |
+
+The core has no terminal, provider SDK, filesystem, subprocess or Bun-specific
+imports. The architecture engine does not run inference; the TUI does not own
+agent tools. `.vcli/architecture.json` declares the enforced package boundaries.
+
 ## Development and packaging
 
 ```sh
 bun run format:check
 bun run check
 bun test
+bun run dev architecture check
 bun run benchmark
 bun run build
 bun run smoke
 ./dist/vcli --help
 ```
 
-Builds produce a host-native executable with the layout worker, font and native
-libraries embedded. Distribute `dist/licenses`, the font license and
-`THIRD_PARTY_NOTICES.md` beside it. Builds are tested on the host platform;
-macOS/Linux CI is configured. Native Windows, browser parity, additional deep
-language analysis, subscription login and autonomous agent teams are deferred.
+Builds produce `dist/vcli` for the current host, embedding the layout worker and
+graphics font. Distribute the entire `dist/` bundle, including licenses, notices,
+the download guide and `WORKFLOWS.md`. CI runs on macOS and Linux, including native
+builds and source/compiled pseudoterminal checks outside the checkout. The smoke
+suite also checks terminal cleanup, image output and a file-descriptor limit of 256.
+
+Tests use offline fixtures and local provider servers; they do not establish live
+provider completion rates or paid-token savings. Manual verification in real
+terminal applications and WSL remains incomplete. Native Windows, browser/IDE
+services, subscription login, background/write/custom agents and deeper language
+analysis are deferred.
 
 The [architecture guide](docs/architecture.md) describes the contracts and package
 boundaries. [Research notes](docs/research.md) record the independent design sources.
 Formatting is automated, commands and tools have focused modules, and the core
 imports neither terminal libraries, provider SDKs nor Bun APIs.
+
+## Documentation
+
+| Guide                                                       | Contents                                                  |
+| ----------------------------------------------------------- | --------------------------------------------------------- |
+| [Downloaded build quick start](docs/artifact-quickstart.md) | Onboarding and startup troubleshooting                    |
+| [Architecture](docs/architecture.md)                        | Contracts, package boundaries, graphs and durable state   |
+| [Local workflows](docs/local-workflows.md)                  | Planning, memory, tasks, explorers, hooks and checkpoints |
+| [Integrations](packages/integrations/README.md)             | Skills, plugin manifests and MCP configuration            |
+| [Extension compatibility](docs/extension-compatibility.md)  | Supported formats, catalogs and remaining gaps            |
+| [Validation](docs/validation.md)                            | Automated evidence and real-terminal checks               |
+| [Benchmarks](docs/benchmarks.md)                            | Reproducible offline context estimates                    |
+| [Research](docs/research.md)                                | Public references and independent implementation scope    |
