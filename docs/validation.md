@@ -223,6 +223,24 @@ and alternate screen return to their previous state. Repeat with `--renderer off
 and explicit protocol overrides where the terminal supports them. Record terminal
 version, transport and result before marking a matrix row verified.
 
+## Homework workflow validation (2026-10-14)
+
+The opt-in `homework` workflow has 57 deterministic tests.
+The full macOS suite passes 346 tests / 2,071 assertions. Frozen installation,
+formatting, TypeScript, declared architecture boundaries, standalone compilation
+and packaged smoke also pass locally. The packaged smoke covers the homework
+workflow outside the checkout and retains the existing source/compiled PTY,
+worker/font, terminal cleanup and FD256 checks. This is local macOS evidence;
+new Linux/WSL results require a separate CI or host run.
+
+Tests cover the exact Python exercise, unchanged tests, real Bash execution,
+an OpenAI-compatible SDK talking to a local model stub, safe/auto approvals,
+schema/policy/path rejection, durable counters, whole-batch admission, controlled
+crash windows, uncertain-action resolution, dependency tasks with tool evidence,
+full-file journals and rollback conflicts. No paid API is used. See
+[the homework guide](homework.md) for reproducible commands and the assessment of
+gaps in the previous general-purpose CLI.
+
 ## Remaining limits
 
 Model context limits must be configured from the chosen model's documented limit;

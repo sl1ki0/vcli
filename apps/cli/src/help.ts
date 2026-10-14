@@ -4,6 +4,7 @@ vcli                                  Open the visual workspace
 vcli setup                            Connect a provider, model and API key
 vcli run <task> [--json]                Run the coding agent
 vcli run <task> --plan                 Explore and save a plan without source edits
+vcli homework --help                   Policy-controlled homework, tasks, diff and rollback
 vcli memory|hooks|tasks|plans show      Inspect local workflow state
 vcli checkpoints list|restore <id>     Inspect or rewind a captured file edit
 vcli architecture scan|view|check      Inspect structure or declared drift

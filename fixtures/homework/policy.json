@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "commands": {
+    "allow": ["python3 -m unittest -v"],
+    "deny": ["rm -rf workspace"]
+  },
+  "directories": {
+    "allow": ["."],
+    "deny": ["private"]
+  },
+  "timeoutMs": 10000,
+  "maxOutputBytes": 65536
+}

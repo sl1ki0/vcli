@@ -1,0 +1,1 @@
+This directory demonstrates policy denial. It contains no credentials or secrets.

@@ -94,6 +94,9 @@
 - Local extension compatibility validation: 289 tests / 1,679 assertions on macOS.
   Format/catalog adapters, preinstall inspection, isolated broken plugins; vendor
   commands/agents/hooks, npm/archive/HTTP catalogs and OAuth remain unsupported.
+- Homework workflow: opt-in `homework` command, external policy/SQLite state,
+  durable safe/auto approvals, structured plans, four counters, verified tasks and
+  whole-run journal/rollback. Guide: docs/homework.md; `bun run test:homework`.
 - Open gaps: background/write/custom agents, nested memory/imports, more/vendor
   hooks, conversation rewind, draft preview restart restoration. Hosted/IDE/login,
   browser parity, native Windows and deeper languages deferred. Manual terminal

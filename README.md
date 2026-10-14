@@ -335,6 +335,57 @@ The core has no terminal, provider SDK, filesystem, subprocess or Bun-specific
 imports. The architecture engine does not run inference; the TUI does not own
 agent tools. `.vcli/architecture.json` declares the enforced package boundaries.
 
+## Coding-agent homework
+
+The `multiagents-homework` branch includes the exact Python exercise and an opt-in
+`homework` workflow covering the assignment through level 10. Install Bun 1.3.13,
+Bash and Python 3.9+, then run its deterministic tests without an API key:
+
+```sh
+git switch multiagents-homework
+bun install --frozen-lockfile
+bun run test:homework
+```
+
+Its model tools are `Bash(command, cwd)`, `list_files`, `read_file`, `write_file`,
+`delete_file`, `submit_plan`, and `complete_task`. Bash returns stdout, stderr and
+exit code. The external [example policy](fixtures/homework/policy.json) allows
+`python3 -m unittest -v`, denies an example command and the `private` directory,
+and rejects unlisted commands, shell syntax, traversal and linked paths. It is
+a policy boundary, not process isolation; use a disposable copy without secrets.
+
+```sh
+HOMEWORK_DIR=$(cd "$(mktemp -d)" && pwd -P)
+cp -R fixtures/homework/workspace "$HOMEWORK_DIR/workspace"
+cp fixtures/homework/policy.json "$HOMEWORK_DIR/policy.json"
+bun run dev homework start --workspace "$HOMEWORK_DIR/workspace" \
+  --policy "$HOMEWORK_DIR/policy.json" --state "$HOMEWORK_DIR/runs.sqlite" \
+  --mode safe --plan --demo 'Fix order calculation. Do not change tests. Run tests.'
+
+RUN_ID=PASTE_PRINTED_RUN_ID
+bun run dev homework plan "$RUN_ID" approve --state "$HOMEWORK_DIR/runs.sqlite" --demo
+bun run dev homework approve "$RUN_ID" allow --state "$HOMEWORK_DIR/runs.sqlite" --demo
+bun run dev homework approve "$RUN_ID" allow --state "$HOMEWORK_DIR/runs.sqlite" --demo
+bun run dev homework resume "$RUN_ID" --state "$HOMEWORK_DIR/runs.sqlite" --demo
+bun run dev homework tasks "$RUN_ID" --state "$HOMEWORK_DIR/runs.sqlite"
+bun run dev homework diff "$RUN_ID" --state "$HOMEWORK_DIR/runs.sqlite"
+bun run dev homework rollback "$RUN_ID" --state "$HOMEWORK_DIR/runs.sqlite"
+```
+
+The first command saves a structured plan and stops. The next commands approve
+the plan, then the file write and Bash separately. Substitute `reject` for plan
+approval or `deny` for an action to demonstrate refusal. `auto` skips write/Bash
+confirmations after policy checks; deletion always requires approval. State and
+policy remain outside the workspace. Counters, task evidence and file hashes
+survive restarts; uncertain actions stop for explicit resolution.
+
+`--demo` supplies a scripted model boundary while using real files, Bash and
+storage. For a real OpenAI-compatible model, set `OPENAI_BASE_URL`, `OPENAI_API_KEY`
+and `OPENAI_MODEL` as in [the environment example](fixtures/homework/.env.example),
+and omit `--demo`. The [homework guide](docs/homework.md) contains the rubric audit,
+all four budget limits, crash injection tests, explicit `resolve` decisions,
+unchanged-test checks and rollback conflict demonstrations.
+
 ## Development and packaging
 
 ```sh
@@ -367,13 +418,14 @@ imports neither terminal libraries, provider SDKs nor Bun APIs.
 
 ## Documentation
 
-| Guide                                                       | Contents                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------- |
-| [Downloaded build quick start](docs/artifact-quickstart.md) | Onboarding and startup troubleshooting                    |
-| [Architecture](docs/architecture.md)                        | Contracts, package boundaries, graphs and durable state   |
-| [Local workflows](docs/local-workflows.md)                  | Planning, memory, tasks, explorers, hooks and checkpoints |
-| [Integrations](packages/integrations/README.md)             | Skills, plugin manifests and MCP configuration            |
-| [Extension compatibility](docs/extension-compatibility.md)  | Supported formats, catalogs and remaining gaps            |
-| [Validation](docs/validation.md)                            | Automated evidence and real-terminal checks               |
-| [Benchmarks](docs/benchmarks.md)                            | Reproducible offline context estimates                    |
-| [Research](docs/research.md)                                | Public references and independent implementation scope    |
+| Guide                                                       | Contents                                                        |
+| ----------------------------------------------------------- | --------------------------------------------------------------- |
+| [Downloaded build quick start](docs/artifact-quickstart.md) | Onboarding and startup troubleshooting                          |
+| [Architecture](docs/architecture.md)                        | Contracts, package boundaries, graphs and durable state         |
+| [Local workflows](docs/local-workflows.md)                  | Planning, memory, tasks, explorers, hooks and checkpoints       |
+| [Coding-agent homework](docs/homework.md)                   | Rubric audit, exercise, policy, approvals, budgets and rollback |
+| [Integrations](packages/integrations/README.md)             | Skills, plugin manifests and MCP configuration                  |
+| [Extension compatibility](docs/extension-compatibility.md)  | Supported formats, catalogs and remaining gaps                  |
+| [Validation](docs/validation.md)                            | Automated evidence and real-terminal checks                     |
+| [Benchmarks](docs/benchmarks.md)                            | Reproducible offline context estimates                          |
+| [Research](docs/research.md)                                | Public references and independent implementation scope          |

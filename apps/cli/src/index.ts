@@ -10,9 +10,11 @@ import { pluginsCommand } from "./commands/plugins.ts";
 import { sessionsCommand } from "./commands/sessions.ts";
 import { runCommand } from "./commands/run.ts";
 import { workflowsCommand } from "./commands/workflows.ts";
+import { homeworkCommand } from "./commands/homework.ts";
 export { printTree } from "./io.ts";
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "homework") return homeworkCommand(process.argv.slice(3));
   const { values, positionals } = parseCliArgs();
   if (values.help) {
     await print(HELP);
