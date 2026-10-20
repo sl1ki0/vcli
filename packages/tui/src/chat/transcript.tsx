@@ -1,9 +1,16 @@
-import { type ScrollBoxRenderable } from "@opentui/core";
+import { CodeRenderable, type BaseRenderable, type ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { Index, Show, createEffect, onCleanup } from "solid-js";
 import type { Conversation } from "./conversation.ts";
 import { createChatStyle, normalizeChatMarkdown } from "./markdown.ts";
 import { ToolActivity } from "./tool-activity.tsx";
+
+function hasPendingHighlight(node: BaseRenderable): boolean {
+  return (
+    (node instanceof CodeRenderable && node.isHighlighting) ||
+    node.getChildren().some(hasPendingHighlight)
+  );
+}
 
 export function ChatTranscript(props: {
   conversation: Conversation;
@@ -24,17 +31,37 @@ export function ChatTranscript(props: {
   createEffect(() => {
     const request = props.conversation.reveal();
     if (!request) return;
+    const planRequest = request.startsWith("plan:");
+    let previousLayout: string | undefined;
+    let measured = false;
     // New user turns rejoin the live conversation once. Streaming never resets manual scroll.
     const reveal = () => {
       if (scroll && !scroll.isDestroyed) {
-        const plan = request.startsWith("plan:")
+        const plan = planRequest
           ? scroll.content.findDescendantById(`message-${request}`)
           : undefined;
+        if (planRequest) {
+          const markdown = plan?.findDescendantById(`message-content-${request}`);
+          const layout =
+            markdown && plan
+              ? `${plan.y - scroll.content.y}:${plan.height}:${markdown.height}:${scroll.viewport.height}`
+              : undefined;
+          // Markdown worker updates can change card geometry after the first painted frame.
+          const ready = markdown && markdown.height > 0 && !hasPendingHighlight(markdown);
+          const changed = !measured || layout !== previousLayout;
+          measured = true;
+          if (!ready || changed) {
+            previousLayout = layout;
+            // Pending workers request their own repaint; avoid spinning frames while they run.
+            if (changed || ready) renderer.requestRender();
+            return;
+          }
+        }
         scroll.scrollTo(plan ? plan.y - scroll.content.y : scroll.scrollHeight);
       }
       props.conversation.acknowledgeReveal(request);
     };
-    renderer.once("frame", reveal);
+    renderer.on("frame", reveal);
     renderer.requestRender();
     onCleanup(() => renderer.off("frame", reveal));
   });

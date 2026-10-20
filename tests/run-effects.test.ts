@@ -168,6 +168,9 @@ test("ask mode durably approves a read plus its exact hook contract and resumes 
     expect(fixture.requests()).toBe(1);
     expect(await fixture.markerExists()).toBe(false);
 
+    // A shell-only permission override may be absent on resume, restoring default YOLO.
+    // The recorded decision must still be checked against the saved compound contract.
+    fixture.config.permission = "yolo";
     harness = await createHarness(
       fixture.root,
       fixture.config,

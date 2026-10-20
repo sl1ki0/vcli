@@ -86,7 +86,7 @@
 - Use rg and meaningful tests. bun install --frozen-lockfile; bun run format:check;
   bun run lint; bun run check; bun test; bun run dev architecture check; bun run
   build; bun run smoke. Source+compiled PTY outside checkout: cleanup, worker/font,
-  graphics, FD256. Local 2026-10-20: 356 tests / 2,062 assertions; reverify changes.
+  graphics, FD256. Local 2026-10-20: 358 tests / 2,075 assertions; reverify changes.
 - bun run benchmark --write docs/benchmarks.md: offline estimates, no paid-model
   savings/completion claims. Fixtures use no paid APIs. tests/run-acceptance.test.ts:
   ordinary harness, unchanged Python tests, Bash, three verified dependent tasks,

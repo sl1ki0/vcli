@@ -18,3 +18,6 @@
   `/permission` and `/help`, retaining compatibility aliases.
 - Added the portable order fixture and deterministic primary-harness verification
   through real Bash, including restart, diff, rollback and unchanged test files.
+- Fixed deferred Markdown layout when revealing long plan cards. Kept pending
+  approvals, saved denials and approved tool contracts effective when a resumed
+  launch falls back to YOLO. CI now reports both platforms independently.

@@ -348,6 +348,47 @@ describe("durable execution in the regular runtime", () => {
     ).toBe(true);
     expect(done.runState?.pending).toEqual([]);
   });
+  test("an offline denial remains binding when the resumed runtime defaults to YOLO", async () => {
+    const f = fixture([[call("a")]]);
+    const paused = await new AgentRuntime({
+      ...f.options,
+      permissions: new PermissionGate("ask"),
+    }).run("Write", f.signal);
+    expect(paused.status).toBe("awaiting-approval");
+    await resolveRunApproval(paused, "a", false, () => f.store.save(paused));
+    const resumed = await new AgentRuntime({
+      ...f.options,
+      permissions: new PermissionGate("yolo"),
+    }).run("", f.signal, "run");
+    expect(resumed.status).toBe("complete");
+    expect(f.effects).toHaveLength(0);
+    expect(
+      resumed.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.toolCallId === "a" &&
+          message.text.includes("Approval denied"),
+      ),
+    ).toBe(true);
+    expect(f.store.events.filter((event) => event.type === "tool-start")).toHaveLength(0);
+  });
+  test("an unresolved durable approval is still required when resume defaults to YOLO", async () => {
+    const f = fixture([[call("a")]]);
+    const paused = await new AgentRuntime({
+      ...f.options,
+      permissions: new PermissionGate("ask"),
+    }).run("Write", f.signal);
+    expect(paused.status).toBe("awaiting-approval");
+    const resumed = await new AgentRuntime({
+      ...f.options,
+      permissions: new PermissionGate("yolo"),
+    }).run("", f.signal, "run");
+    expect(resumed.status).toBe("awaiting-approval");
+    expect(resumed.runState?.calls.a?.status).toBe("approval");
+    expect(f.effects).toHaveLength(0);
+    expect(f.counts.requests).toBe(1);
+    expect(f.store.events.filter((event) => event.type === "tool-start")).toHaveLength(0);
+  });
   test("fail resolution remains possible after an exhausted crash reservation and replaces its synthetic result", async () => {
     const f = fixture([[call("a")]]);
     f.options.runLimits = { resultBytes: 32 };
@@ -390,7 +431,11 @@ describe("durable execution in the regular runtime", () => {
         return { text: "Changed" };
       },
     });
-    const done = await new AgentRuntime({ ...f.options, tools: changed }).run("", f.signal, "run");
+    const done = await new AgentRuntime({
+      ...f.options,
+      tools: changed,
+      permissions: new PermissionGate("yolo"),
+    }).run("", f.signal, "run");
     expect(f.effects).toHaveLength(0);
     expect(
       done.messages.some(

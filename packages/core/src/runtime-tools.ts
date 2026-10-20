@@ -114,7 +114,9 @@ export class ToolExecutionController {
         approvalTool,
         summary ? { ...call.arguments, additionalRuntimeEffects: summary } : call.arguments,
         call.id,
-        context.requireApproval,
+        context.requireApproval ||
+          entry.status === "approval" ||
+          entry.approval?.decision !== undefined,
       );
       if (session.invalidToolRequests?.blocked) return blockedResult();
       context.effectsAuthorized =

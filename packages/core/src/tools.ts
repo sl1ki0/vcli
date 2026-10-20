@@ -173,10 +173,10 @@ export class PermissionGate {
     callId?: string,
     force = false,
   ): Promise<void> {
-    if (tool.kind === "read") return;
     const saved = callId && this.binding?.session.runState?.calls[callId];
     if (saved && saved.approval?.decision === false)
       throw new Error(`Approval denied for ${tool.name}.`);
+    if (tool.kind === "read") return;
     this.checkPolicy(tool, this.binding);
     if (this.mode === "yolo" && !force) return;
     const binding = this.binding;

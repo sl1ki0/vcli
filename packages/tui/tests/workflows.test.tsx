@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { CodeRenderable, type BaseRenderable } from "@opentui/core";
 import {
   createRunPlan,
   decideRunPlan,
@@ -51,6 +52,17 @@ async function submit(setup: Awaited<ReturnType<typeof testRender>>, text: strin
   await setup.flush();
   await setup.mockInput.typeText(text);
   setup.mockInput.pressEnter();
+  await setup.flush();
+}
+
+async function finishMarkdown(setup: Awaited<ReturnType<typeof testRender>>) {
+  const pending: Promise<void>[] = [];
+  function visit(node: BaseRenderable): void {
+    if (node instanceof CodeRenderable) pending.push(node.highlightingDone);
+    for (const child of node.getChildren()) visit(child);
+  }
+  visit(setup.renderer.root);
+  await Promise.all(pending);
   await setup.flush();
 }
 
@@ -194,7 +206,12 @@ test.each([true, false])(
         {
           id: `plan:${session.id}:${plan.createdAt}`,
           role: "assistant",
-          text: "## Execution plan\n\nFix order totals\n\nRead, correct, verify.",
+          text:
+            "## Execution plan\n\nFix order totals\n\nRead, correct, verify.\n\n" +
+            Array.from(
+              { length: 30 },
+              (_, index) => `Detail ${index + 1}: preserve the public behavior.`,
+            ).join("\n\n"),
           status: "complete",
           createdAt: plan.createdAt,
         },
@@ -229,15 +246,29 @@ test.each([true, false])(
     );
     try {
       await submit(setup, "/plan show");
+      await finishMarkdown(setup);
+      await setup.waitForFrame(
+        (frame) => frame.includes("Fix order totals") && frame.includes("architecture hidden"),
+      );
       expect(setup.captureCharFrame()).toContain("Fix order totals");
+      expect(setup.captureCharFrame()).toContain("Execution plan");
       expect(setup.captureCharFrame()).not.toContain("STAGE 1");
       await submit(setup, "/plan visual");
+      await setup.waitForFrame(
+        (frame) =>
+          frame.includes("STAGE 3") && frame.includes("← inspect") && frame.includes("← fix"),
+      );
       const frame = setup.captureCharFrame();
       expect(frame).toContain("STAGE 1");
       expect(frame).toContain("STAGE 3");
       expect(frame).toContain("← inspect");
       expect(frame).toContain("← fix");
       await submit(setup, approved ? "/build" : "/plan reject");
+      await setup.waitForFrame(
+        (frame) =>
+          frame.includes(approved ? "Plan approved" : "Plan rejected") &&
+          frame.includes(approved ? "BUILD" : "PLAN"),
+      );
       expect(decisions).toEqual([approved]);
       expect(setup.captureCharFrame()).toContain(approved ? "BUILD" : "PLAN");
       expect(setup.captureCharFrame()).toContain(approved ? "Plan approved" : "Plan rejected");

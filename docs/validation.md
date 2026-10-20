@@ -4,7 +4,7 @@ This release is validated locally on macOS arm64 with Bun 1.3.13. Run
 `bun run format:check`, `bun run lint`, `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-On 2026-10-20 the local suite passes 356 tests with 2,062 assertions, including
+On 2026-10-20 the local suite passes 358 tests with 2,075 assertions, including
 durable ordinary runs, chat, first-run setup, local workflows and extensions.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage

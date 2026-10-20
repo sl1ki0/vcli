@@ -103,7 +103,8 @@ vcli sessions resume RUN_ID
 
 Denial is returned as a tool result so the model can choose another action. Tool
 contracts are checked again before execution; an old decision cannot authorize a
-changed contract. Reads with hooks or lazy process startup are treated as compound
+changed contract. Pending approvals and recorded denials survive resume even when
+the new launch uses the default YOLO configuration. Reads with hooks or lazy process startup are treated as compound
 actions and include those effects in authorization and budget checks.
 
 ## Budgets and recovery
