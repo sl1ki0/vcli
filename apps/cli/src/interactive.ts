@@ -13,11 +13,14 @@ import { credentialScope } from "./credentials.ts";
 import { createWorkspaceHistory } from "./workspace-history.ts";
 import { rewindCheckpoint } from "./workflows/inspection.ts";
 import { SqliteSessionStore } from "./store.ts";
+import { decidePlan } from "./workflows/run-controls.ts";
 
 interface InteractiveOptions {
   overrides?: Partial<Config>;
   initialCommand?: WorkspaceOptions["initialCommand"];
   mode?: "build" | "plan";
+  policyPath?: string;
+  stateDirectory?: string;
 }
 interface ProjectWorkspace {
   root: string;
@@ -85,9 +88,25 @@ export async function interactive(
         if (update.kind === "permission") activeHarness?.setPermission(snapshot.permission);
         return snapshot;
       },
-      inspect: (topic) => inspectWorkspace(current.root, topic),
+      inspect: async (topic) => {
+        const store = await SqliteSessionStore.open(current.root, {
+          directory: options.stateDirectory,
+        });
+        try {
+          const session =
+            activeHarness?.runtime.currentSession ??
+            (sessionId ? await store.get(sessionId) : undefined);
+          return await inspectWorkspace(current.root, topic, session, {
+            directory: options.stateDirectory,
+          });
+        } finally {
+          store.close();
+        }
+      },
       readArtifact: async (id) => {
-        const store = await SqliteSessionStore.open(current.root);
+        const store = await SqliteSessionStore.open(current.root, {
+          directory: options.stateDirectory,
+        });
         try {
           return await store.readArtifact(id);
         } finally {
@@ -105,9 +124,19 @@ export async function interactive(
           mode === "plan" ? "read-only" : settings.currentConfig().permission,
           approve,
         ),
-      sessions: createWorkspaceHistory(current.root, (selected) => {
-        sessionId = selected;
-      }),
+      decidePlan: async (approved) => {
+        if (!sessionId) throw new Error("Select a conversation with a draft plan first.");
+        const session = await decidePlan(current.root, sessionId, approved, options);
+        mode = session.mode ?? "plan";
+        return session;
+      },
+      sessions: createWorkspaceHistory(
+        current.root,
+        (selected) => {
+          sessionId = selected;
+        },
+        { directory: options.stateDirectory },
+      ),
       openProject: async (path) => {
         next = await openProject(path, current.root, architecture, options.overrides ?? {});
       },
@@ -118,7 +147,13 @@ export async function interactive(
           architecture,
           emit,
           approve,
-          { ...settings.harnessOptions(), mode },
+          {
+            ...settings.harnessOptions(),
+            mode,
+            policyPath: options.policyPath,
+            stateDirectory: options.stateDirectory,
+            resumeId: sessionId,
+          },
         );
         activeHarness = harness;
         // A settings write can finish while the harness is still being initialized.

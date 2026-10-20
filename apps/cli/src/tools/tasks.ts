@@ -1,5 +1,6 @@
 import { boundText, type ToolDefinition } from "@vcli/core";
-import { LocalTaskStore, type TaskChange } from "../workflows/tasks.ts";
+import type { LocalTaskStore } from "../workflows/tasks.ts";
+import { type TaskChange } from "../workflows/tasks.ts";
 import { objectSchema, stringSchema } from "./schema.ts";
 
 export function createTaskTools(store: LocalTaskStore): ToolDefinition[] {

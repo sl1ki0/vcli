@@ -447,7 +447,7 @@ describe("architecture-first harness acceptance", () => {
           calls: [{ name: "artifacts_read", args: { id: artifact, start: 50001, end: 50003 } }],
         };
       }
-      expect(result).toContain("50002: line-50000");
+      expect(result).toContain("50003: line-50000");
       return { text: "Full output saved; requested lines retrieved." };
     });
     let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
@@ -463,9 +463,9 @@ describe("architecture-first harness acceptance", () => {
       );
       expect(session.status).toBe("complete");
       const full = await harness.store.readArtifact(artifact);
-      expect(full.startsWith("Exit 0\nline-0\n")).toBe(true);
-      expect(full.endsWith("line-99999\n")).toBe(true);
-      expect(full.split("\n")).toHaveLength(100_002);
+      expect(full.startsWith("Exit 0\nstdout:\nline-0\n")).toBe(true);
+      expect(full.endsWith("line-99999\n\nstderr:\n")).toBe(true);
+      expect(full.split("\n")).toHaveLength(100_005);
       expect(full).toContain("line-50000\n");
       expect(
         session.messages
@@ -498,7 +498,7 @@ describe("architecture-first harness acceptance", () => {
         return {
           calls: [
             { name: "files_read", args: { path: "src/read.ts", start: 1, end: 80 } },
-            { name: "files_read", args: { path: "src/../src/read.ts", start: 50, end: 120 } },
+            { name: "files_read", args: { path: "./src/read.ts", start: 50, end: 120 } },
           ],
         };
       const results = body.messages.filter((message) => message.role === "tool");

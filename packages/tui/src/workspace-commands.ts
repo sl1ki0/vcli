@@ -7,7 +7,13 @@ import {
   onMount,
   type Accessor,
 } from "solid-js";
-import type { ArchitectureGraph, PermissionMode, Session, ToolDefinition } from "@vcli/core";
+import type {
+  ArchitectureGraph,
+  PermissionMode,
+  RunPlanState,
+  Session,
+  ToolDefinition,
+} from "@vcli/core";
 import type {
   WorkspaceOptions,
   WorkspaceSettingsUpdate,
@@ -36,6 +42,8 @@ interface CommandOptions {
   restoreSession(session: Session): void;
   clearConversation(): void;
   approve?: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>;
+  plan: Accessor<RunPlanState | undefined>;
+  revealPlan(): void;
 }
 export function createWorkspaceCommands(options: CommandOptions) {
   const props = options.workspace;
@@ -192,6 +200,16 @@ export function createWorkspaceCommands(options: CommandOptions) {
     working: setWorking,
     refresh: options.refresh,
     approve: options.approve,
+    plan: options.plan,
+    showPlan: (visual) => {
+      if (visual) open("plan");
+      else {
+        cancel();
+        options.changeLayout("chat");
+        options.revealPlan();
+      }
+    },
+    restoreSession: options.restoreSession,
   });
   async function execute(text: string): Promise<boolean> {
     const prompt = text.trim();
@@ -233,7 +251,12 @@ export function createWorkspaceCommands(options: CommandOptions) {
       if (args.length && canChange()) await openProject(args.join(" "));
     } else if (name === "/plugins" || name === "/skills")
       await inspect(name.slice(1) as "plugins" | "skills");
-    else if (name === "/observed" || name === "/intended" || name === "/changes") {
+    else if (name === "/view") {
+      if (["observed", "intended", "changes"].includes(args[0] ?? "")) {
+        cancel();
+        await options.changeView(args[0] as GraphView);
+      } else feedback("Use /view observed, /view intended or /view changes.");
+    } else if (name === "/observed" || name === "/intended" || name === "/changes") {
       cancel();
       await options.changeView(name.slice(1) as GraphView);
     } else if (name === "/scan") {
@@ -246,6 +269,16 @@ export function createWorkspaceCommands(options: CommandOptions) {
     return true;
   }
   function choices(): PanelChoice[] {
+    if (panel() === "plan")
+      return [
+        { label: "Back to plan in chat", select: () => execute("/plan show").then(() => {}) },
+        ...(options.plan()?.status === "draft"
+          ? [
+              { label: "Approve plan", select: () => execute("/plan approve").then(() => {}) },
+              { label: "Reject plan", select: () => execute("/plan reject").then(() => {}) },
+            ]
+          : []),
+      ];
     if (panel() === "connect") return connection.choices();
     if (panel() === "tokens") return budgets.choices();
     if (panel() === "reasoning") return reasoning.choices();
@@ -328,6 +361,7 @@ export function createWorkspaceCommands(options: CommandOptions) {
     history,
     readTitle,
     readContent,
+    plan: options.plan,
     open,
     cancel,
     execute,

@@ -109,3 +109,79 @@ test("child actual usage cannot be hidden by a smaller reservation and invalid b
   expect(parent.budgetSpent).toBe(4500);
   await expect(reserveDelegation(parent, 4000, NaN, async () => {})).rejects.toThrow("nonnegative");
 });
+
+test("explorers reserve shared run counters before launch and settle actual usage durably", async () => {
+  const { initializeRunState, settleDelegationReservation } = await import("../src/index.ts");
+  const parent = session();
+  const state = initializeRunState(parent, {
+    modelRequests: 8,
+    toolCalls: 30,
+    resultBytes: 10_000,
+  });
+  let snapshot: Session | undefined;
+  const save = async () => {
+    snapshot = structuredClone(parent);
+  };
+  const reservation = await reserveDelegation(parent, 4000, 10000, save);
+  expect(reservation.runLimits).toEqual({
+    modelRequests: 6,
+    toolCalls: 24,
+    sideEffects: 0,
+    resultBytes: 10_000,
+  });
+  expect(snapshot?.runState?.counters).toEqual(reservation.runLimits);
+  const child = session(700);
+  child.id = "child";
+  child.usage = { input: 500, output: 200, cached: 50 };
+  initializeRunState(child, reservation.runLimits).counters = {
+    modelRequests: 2,
+    toolCalls: 3,
+    sideEffects: 0,
+    resultBytes: 120,
+  };
+  await reservation.settle(child);
+  expect(state.counters).toEqual({
+    modelRequests: 2,
+    toolCalls: 3,
+    sideEffects: 0,
+    resultBytes: 120,
+  });
+  const resumed = structuredClone(snapshot!);
+  await settleDelegationReservation(resumed, reservation.id, child, async () => {});
+  expect(resumed.runState?.counters).toEqual(state.counters);
+  expect(resumed.budgetSpent).toBe(700);
+  expect(resumed.usage).toEqual(child.usage);
+});
+
+for (const resource of ["modelRequests", "toolCalls", "resultBytes"] as const)
+  test(`an exhausted parent ${resource} budget cannot launch a fresh explorer`, async () => {
+    const { initializeRunState } = await import("../src/index.ts");
+    const parent = session(50);
+    const state = initializeRunState(parent, { [resource]: 0 });
+    await expect(reserveDelegation(parent, 4000, 10000, async () => {})).rejects.toThrow(resource);
+    expect(parent.budgetSpent).toBe(50);
+    expect(state.counters.modelRequests).toBe(0);
+    expect(state.counters.toolCalls).toBe(0);
+  });
+
+test("concurrent explorers cannot overbook the last shared model request and unknown outcomes retain counters", async () => {
+  const { initializeRunState } = await import("../src/index.ts");
+  const parent = session();
+  const state = initializeRunState(parent, { modelRequests: 1, toolCalls: 2, resultBytes: 100 });
+  const first = reserveDelegation(parent, 4000, undefined, async () => {
+    await Promise.resolve();
+  });
+  await expect(reserveDelegation(parent, 4000, undefined, async () => {})).rejects.toThrow(
+    "modelRequests",
+  );
+  const reservation = await first;
+  expect(reservation.runLimits.modelRequests).toBe(1);
+  await reservation.settle();
+  expect(state.counters).toEqual({
+    modelRequests: 1,
+    toolCalls: 2,
+    sideEffects: 0,
+    resultBytes: 100,
+  });
+  expect(parent.budgetSpent).toBe(4000);
+});

@@ -1,15 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PermissionGate, type PermissionMode, type ToolDefinition } from "@vcli/core";
+import { PermissionGate, type PermissionMode, type Session, type ToolDefinition } from "@vcli/core";
 import { createCheckpointTools } from "../tools/checkpoints.ts";
 import { CheckpointService } from "./checkpoints.ts";
 import { loadProjectMemory } from "./memory.ts";
 import { loadProjectHooks } from "./hooks.ts";
-import { readPlans } from "./plans.ts";
+import { formatRunPlan, readPlans } from "./plans.ts";
 import { LocalTaskStore } from "./tasks.ts";
 
 export type WorkflowInspection = "memory" | "tasks" | "checkpoints" | "hooks" | "plan";
-export async function inspectWorkflow(root: string, topic: WorkflowInspection): Promise<string> {
+export async function inspectWorkflow(
+  root: string,
+  topic: WorkflowInspection,
+  session?: Session,
+): Promise<string> {
   switch (topic) {
     case "memory": {
       const memory = await loadProjectMemory(root);
@@ -20,12 +24,25 @@ export async function inspectWorkflow(root: string, topic: WorkflowInspection): 
     }
     case "tasks": {
       const tasks = await new LocalTaskStore(root).list();
+      const active = session?.plan
+        ? `Run ${session.id} · ${session.plan.status}\n${session.plan.steps
+            .map(
+              (task) =>
+                `${task.id} · ${task.status}\n${task.description}\nDependencies: ${task.dependencies.join(", ") || "none"}\nReady when: ${task.doneWhen}\nVerified calls: ${task.verifiedBy?.join(", ") || "none"}`,
+            )
+            .join("\n\n")}`
+        : "";
       return (
-        tasks
-          .map(
-            (task) =>
-              `${task.id} · ${task.status}\n${task.title}\n${task.description}\nDependencies: ${task.dependencies.join(", ") || "none"}`,
-          )
+        [
+          active,
+          tasks
+            .map(
+              (task) =>
+                `${task.id} · ${task.status}\n${task.title}\n${task.description}\nDependencies: ${task.dependencies.join(", ") || "none"}`,
+            )
+            .join("\n\n"),
+        ]
+          .filter(Boolean)
           .join("\n\n") || "No tasks yet. Ask the agent to create and track a task list."
       );
     }
@@ -45,7 +62,7 @@ export async function inspectWorkflow(root: string, topic: WorkflowInspection): 
       return readFile(join(root, ".vcli/hooks.json"), "utf8");
     }
     case "plan":
-      return readPlans(root);
+      return session?.plan ? formatRunPlan(session.plan, session.id) : readPlans(root);
   }
 }
 

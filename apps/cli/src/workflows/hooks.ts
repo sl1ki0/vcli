@@ -1,13 +1,8 @@
 import { spawn } from "node:child_process";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  PermissionGate,
-  type ToolCall,
-  type ToolContext,
-  type ToolDefinition,
-  type ToolResult,
-} from "@vcli/core";
+import type { PermissionGate } from "@vcli/core";
+import { type ToolCall, type ToolContext, type ToolDefinition, type ToolResult } from "@vcli/core";
 
 export type HookEvent = "beforeTool" | "afterTool";
 export interface CommandHook {
@@ -163,10 +158,19 @@ export class ProjectHooks {
   constructor(
     private readonly config: HookConfig,
     private readonly permissions: PermissionGate,
+    private readonly preflight?: (command: string, context: ToolContext) => Promise<void>,
   ) {}
 
   get hasHooks(): boolean {
     return this.config.beforeTool.length > 0 || this.config.afterTool.length > 0;
+  }
+
+  effects(call: ToolCall): { name: string; event: HookEvent; command: string }[] {
+    return (["beforeTool", "afterTool"] as const).flatMap((event) =>
+      this.config[event]
+        .filter((hook) => hook.tools.includes("*") || hook.tools.includes(call.name))
+        .map(({ name, command }) => ({ name, event, command })),
+    );
   }
 
   async beforeTool(call: ToolCall, context: ToolContext): Promise<HookReport[]> {
@@ -196,7 +200,10 @@ export class ProjectHooks {
       };
       let report: HookReport;
       try {
-        await this.permissions.authorize(tool, { command: hook.command, tool: call.name, event });
+        await this.preflight?.(hook.command, context);
+        if (context.effectsAuthorized) this.permissions.assertAllowed(tool);
+        else
+          await this.permissions.authorize(tool, { command: hook.command, tool: call.name, event });
         // Deliberately omit full artifacts and UI details from hook input.
         const payload = JSON.stringify({
           version: 1,
@@ -232,13 +239,14 @@ export class ProjectHooks {
 export async function loadProjectHooks(
   root: string,
   permissions: PermissionGate,
+  preflight?: (command: string, context: ToolContext) => Promise<void>,
 ): Promise<ProjectHooks> {
   let handle;
   try {
     handle = await open(join(root, ".vcli/hooks.json"), "r");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return new ProjectHooks({ beforeTool: [], afterTool: [] }, permissions);
+    return new ProjectHooks({ beforeTool: [], afterTool: [] }, permissions, preflight);
   }
   try {
     if (!(await handle.stat()).isFile()) throw new Error("hooks.json must be a regular file.");
@@ -248,6 +256,7 @@ export async function loadProjectHooks(
     return new ProjectHooks(
       parseHooks(JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"))),
       permissions,
+      preflight,
     );
   } finally {
     await handle.close();

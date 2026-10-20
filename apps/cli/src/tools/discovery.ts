@@ -17,7 +17,7 @@ export function createDiscoveryTool(
     inputSchema: objectSchema({ query: stringSchema }, ["query"]),
     async execute(args, context) {
       const query = String(args.query);
-      await options.discover?.(query, context.signal);
+      await options.discover?.(query, context.signal, context);
       context.signal.throwIfAborted();
 
       const matches = registry.search(query);

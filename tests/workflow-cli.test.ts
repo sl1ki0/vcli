@@ -6,7 +6,7 @@ test("public CLI plans, resumes in plan mode, implements explicitly and rewinds 
   expect(
     await workflowsSmoke([process.execPath, resolve(import.meta.dir, "../apps/cli/src/index.ts")]),
   ).toEqual({
-    requests: 5,
+    requests: 7,
     planProtected: true,
     resumedPlan: true,
     tasksPersisted: true,

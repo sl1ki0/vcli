@@ -1,9 +1,9 @@
-import type { ArchitectureService, SessionStore } from "@vcli/core";
+import type { ArchitectureService, SessionStore, ToolContext } from "@vcli/core";
 
 export interface BuiltinOptions {
   architecture: ArchitectureService;
   store: SessionStore;
-  discover?: (query: string, signal: AbortSignal) => Promise<void>;
+  discover?: (query: string, signal: AbortSignal, context?: ToolContext) => Promise<void>;
   record?: (values: {
     decisions?: string[];
     constraints?: string[];

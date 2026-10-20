@@ -2,14 +2,17 @@ import { SqliteSessionStore } from "../store.ts";
 import { print } from "../io.ts";
 import { runCommand } from "./run.ts";
 import type { CommandContext } from "./context.ts";
+import { sessionControl } from "./session-controls.ts";
+import { storeOptions } from "../run-options.ts";
 export async function sessionsCommand(
   action: string | undefined,
   rest: string[],
   context: CommandContext,
 ) {
   const { root } = context;
+  if (await sessionControl(action, rest, context)) return;
   if (action === "list") {
-    const store = await SqliteSessionStore.open(root);
+    const store = await SqliteSessionStore.open(root, storeOptions(context.values));
     try {
       await print(
         (await store.list(root)).map(({ id, status, ledger, usage, updatedAt }) => ({

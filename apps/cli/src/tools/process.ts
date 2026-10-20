@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ToolContext } from "@vcli/core";
+import { projectPath } from "../workflows/policy.ts";
 
 const OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024;
 const KILL_GRACE_MS = 500;
@@ -9,17 +10,40 @@ export async function executeProcess(
   args: string[],
   context: ToolContext,
   timeoutMs = 120_000,
-): Promise<{ code: number; output: string }> {
+  options: { cwd?: string; outputLimitBytes?: number } = {},
+): Promise<{
+  code: number;
+  output: string;
+  stdout: string;
+  stderr: string;
+  cwd: string;
+  truncated: boolean;
+  timedOut: boolean;
+}> {
   context.signal.throwIfAborted();
+  const cwd = await projectPath(context.root, options.cwd ?? ".", {
+    directory: true,
+    allowRoot: true,
+  });
+  const limit = Math.max(
+    0,
+    Math.min(
+      OUTPUT_LIMIT_BYTES,
+      options.outputLimitBytes ?? OUTPUT_LIMIT_BYTES,
+      context.resultBytes ?? OUTPUT_LIMIT_BYTES,
+    ),
+  );
 
   return new Promise((accept, reject) => {
     const child = spawn(command, args, {
-      cwd: context.root,
+      cwd,
       env: process.env,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     const chunks: Buffer[] = [];
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
     let bytes = 0;
     let capped = false;
     let timedOut = false;
@@ -46,11 +70,12 @@ export async function executeProcess(
       }
     };
 
-    const collect = (chunk: Buffer) => {
-      const room = OUTPUT_LIMIT_BYTES - bytes;
+    const collect = (chunk: Buffer, stream: Buffer[]) => {
+      const room = limit - bytes;
       if (room > 0) {
         const part = chunk.subarray(0, room);
         chunks.push(part);
+        stream.push(part);
         bytes += part.length;
       }
       if (chunk.length > room) {
@@ -71,8 +96,8 @@ export async function executeProcess(
       context.signal.removeEventListener("abort", abort);
     };
 
-    child.stdout.on("data", collect);
-    child.stderr.on("data", collect);
+    child.stdout.on("data", (chunk: Buffer) => collect(chunk, stdout));
+    child.stderr.on("data", (chunk: Buffer) => collect(chunk, stderr));
     context.signal.addEventListener("abort", abort, { once: true });
 
     child.once("error", (error) => {
@@ -88,13 +113,18 @@ export async function executeProcess(
       }
 
       const suffix = capped
-        ? "\nOutput exceeded 32 MiB; process terminated."
+        ? `\nOutput exceeded ${limit} bytes; process terminated.`
         : timedOut
           ? "\nProcess timed out and was terminated."
           : "";
       accept({
         code: code ?? 1,
         output: Buffer.concat(chunks).toString("utf8") + suffix,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        cwd,
+        truncated: capped,
+        timedOut,
       });
     });
   });

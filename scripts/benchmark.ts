@@ -22,6 +22,7 @@ import {
   type ToolContext,
 } from "@vcli/core";
 import { registerBuiltins } from "../apps/cli/src/builtin-tools.ts";
+import { createPlanTools } from "../apps/cli/src/tools/plans.ts";
 
 // No provider adapter is imported or called. The evidence recipes below are
 // scripted retrieval, not a claim that a model independently found the answer.
@@ -129,7 +130,7 @@ const tasks: Task[] = [
       {
         label: "YOLO bypasses approvals after policy validation",
         path: "packages/core/src/tools.ts",
-        needle: 'if (this.mode === "yolo") return;',
+        needle: 'if (this.mode === "yolo" && !force) return;',
       },
       {
         label: "Read-only denies mutations",
@@ -293,6 +294,13 @@ function registryFor(graph: ArchitectureGraph, design: ArchitectureDesign) {
     architecture: { ...architecture, scan: async () => graph, readDesign: async () => design },
     store,
   });
+  for (const tool of createPlanTools({
+    getSession: () => undefined,
+    save: async () => {
+      throw new Error("Offline schema fixture cannot save plans");
+    },
+  }))
+    registry.register(tool);
   const categories = ["architecture", "permissions", "extensions", "build", "files"];
   for (let index = 0; index < extensionCount; index++) {
     const category = categories[index % categories.length]!;

@@ -3,16 +3,19 @@ import { discoverSkills, PluginManager, projectSkillLocations } from "@vcli/inte
 import { configHome } from "./config.ts";
 import { SqliteSessionStore } from "./store.ts";
 import { inspectWorkflow, type WorkflowInspection } from "./workflows/inspection.ts";
+import type { Session } from "@vcli/core";
 
 /** Read-only workspace panels. They discover metadata without connecting MCP or a model. */
 export async function inspectWorkspace(
   root: string,
   topic: "sessions" | "plugins" | "skills" | WorkflowInspection,
+  session?: Session,
+  options: { directory?: string } = {},
 ): Promise<string> {
   if (topic !== "sessions" && topic !== "plugins" && topic !== "skills")
-    return inspectWorkflow(root, topic);
+    return inspectWorkflow(root, topic, session);
   if (topic === "sessions") {
-    const store = await SqliteSessionStore.open(root);
+    const store = await SqliteSessionStore.open(root, options);
     try {
       const sessions = await store.list(root);
       return sessions.length

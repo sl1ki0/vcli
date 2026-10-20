@@ -22,8 +22,11 @@ export async function livePermissionsSmoke(command: string | string[]) {
     async fetch(request) {
       const body = (await request.json()) as { messages: { role: string; content: string }[] };
       const turn = requests++;
-      const last = body.messages.filter((message) => message.role === "tool").at(-1);
-      if (last) results.push(last.content);
+      results.push(
+        ...body.messages
+          .filter((message) => message.role === "tool")
+          .map((message) => message.content),
+      );
       if (turn === 2) {
         paused();
         await modelWaiting;
@@ -46,6 +49,34 @@ export async function livePermissionsSmoke(command: string | string[]) {
                   }),
                 },
               },
+              ...(turn === 4
+                ? [
+                    {
+                      index: 1,
+                      id: "live-plan",
+                      type: "function",
+                      function: {
+                        name: "plan_publish",
+                        arguments: JSON.stringify({
+                          goal: "Plan the value change without editing source",
+                          steps: [
+                            {
+                              id: "value",
+                              description: "Change and verify the value after approval",
+                              dependencies: [],
+                              tools: ["files_patch", "files_read"],
+                              verificationTool: "files_read",
+                              doneWhen: "Source contains the approved value",
+                            },
+                          ],
+                          risks: [],
+                          assumptions: ["Plan approval retains the current permission mode"],
+                          doneWhen: "The approved change is verified",
+                        }),
+                      },
+                    },
+                  ]
+                : []),
             ],
           }
         : { content: turn === 3 ? "Live permissions completed." : "Plan policy preserved." };
@@ -117,7 +148,7 @@ export async function livePermissionsSmoke(command: string | string[]) {
     await terminal.submit("Attempt an edit in plan mode", "Plan policy preserved.");
     await terminal.waitFor("Ready");
     if (
-      !results.at(-1)?.includes("Plan mode denies") ||
+      !results.some((result) => result.includes("Plan mode denies")) ||
       !(await readFile(join(root, "app.ts"), "utf8")).includes("value = 3")
     )
       throw new Error("Live YOLO bypassed plan/read-only policy");

@@ -19,6 +19,8 @@ export function parseCliArgs() {
       endpoint: { type: "string" },
       permission: { type: "string" },
       renderer: { type: "string" },
+      policy: { type: "string" },
+      "state-dir": { type: "string" },
       project: { type: "boolean" },
       ref: { type: "string" },
       subdir: { type: "string" },

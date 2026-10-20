@@ -10,6 +10,7 @@ import type {
   ToolSchema,
 } from "./contracts.ts";
 import { estimateTokens } from "./context.ts";
+import { PendingApprovalError } from "./run-state.ts";
 
 /** Schema-only fingerprint: never includes the supplied argument values. */
 function validationSignatures(errors: ErrorObject[]): string[] {
@@ -166,15 +167,29 @@ export class PermissionGate {
   bindSession(session: Session, save: () => Promise<void>): void {
     this.binding = { session, save };
   }
-  async authorize(tool: ToolDefinition, args: Record<string, unknown>): Promise<void> {
+  async authorize(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    callId?: string,
+    force = false,
+  ): Promise<void> {
     if (tool.kind === "read") return;
+    const saved = callId && this.binding?.session.runState?.calls[callId];
+    if (saved && saved.approval?.decision === false)
+      throw new Error(`Approval denied for ${tool.name}.`);
     this.checkPolicy(tool, this.binding);
-    if (this.mode === "yolo") return;
+    if (this.mode === "yolo" && !force) return;
     const binding = this.binding;
     // A grant cannot become usable while its persistence is still in flight.
-    const result = this.authorization.then(() => this.authorizeAsk(tool, args, binding));
+    const result = this.authorization.then(() =>
+      this.authorizeAsk(tool, args, binding, callId, force),
+    );
     this.authorization = result.catch(() => {});
     return result;
+  }
+  /** Cheap live-policy recheck immediately before the executor crosses its effect boundary. */
+  assertAllowed(tool: ToolDefinition): void {
+    if (tool.kind !== "read") this.checkPolicy(tool, this.binding);
   }
   private checkPolicy(tool: ToolDefinition, binding: typeof this.binding): void {
     if (this.mode === "read-only") throw new Error(`Read-only mode denies ${tool.name}.`);
@@ -185,10 +200,12 @@ export class PermissionGate {
     tool: ToolDefinition,
     args: Record<string, unknown>,
     binding: typeof this.binding,
+    callId?: string,
+    force = false,
   ): Promise<void> {
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
     this.checkPolicy(tool, binding);
-    if (this.mode === "yolo") return;
+    if (this.mode === "yolo" && !force) return;
     const contract = () =>
       JSON.stringify({
         name: tool.name,
@@ -202,7 +219,7 @@ export class PermissionGate {
     );
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
     this.checkPolicy(tool, binding);
-    if (this.currentMode === "yolo") return;
+    if (this.currentMode === "yolo" && !force) return;
     const schemaDigest = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
     const grant = binding && {
       sessionId: binding.session.id,
@@ -212,6 +229,7 @@ export class PermissionGate {
       schemaDigest,
     };
     if (
+      !force &&
       grant &&
       binding.session.toolApprovals?.some(
         (saved) =>
@@ -223,6 +241,16 @@ export class PermissionGate {
       )
     )
       return;
+    const entry = callId && binding?.session.runState?.calls[callId];
+    if (entry && entry.approval?.schemaDigest && entry.approval.schemaDigest !== schemaDigest)
+      throw new Error(`Tool contract changed for ${tool.name}. Request approval again.`);
+    const savedDecision = entry ? entry.approval?.decision : undefined;
+    if (entry && savedDecision === undefined) {
+      entry.status = "approval";
+      entry.approval = { schemaDigest };
+      await binding!.save();
+      if (!this.approve) throw new PendingApprovalError(callId!);
+    }
     const change = this.modeChange.signal;
     let onChange!: () => void;
     const modeChanged = new Promise<undefined>((resolve) => {
@@ -231,19 +259,35 @@ export class PermissionGate {
     });
     let decision: ApprovalDecision | undefined;
     try {
-      decision = await Promise.race([this.approve?.(tool, args, change), modeChanged]);
+      decision =
+        savedDecision ?? (await Promise.race([this.approve?.(tool, args, change), modeChanged]));
     } finally {
       change.removeEventListener("abort", onChange);
     }
     // The UI may resolve its canceled card before the mode-change race settles.
-    if (change.aborted) return this.authorizeAsk(tool, args, binding);
+    if (change.aborted) {
+      if (entry) {
+        entry.status = "reserved";
+        await binding!.save();
+      }
+      return this.authorizeAsk(tool, args, binding, callId, force);
+    }
+    if (entry) {
+      entry.approval = {
+        decision: decision ?? false,
+        decidedAt: new Date().toISOString(),
+        schemaDigest,
+      };
+      entry.status = "reserved";
+      await binding!.save();
+    }
     if (decision !== true && decision !== "always")
       throw new Error(`Approval denied for ${tool.name}.`);
     if (this.binding !== binding) throw new Error("Approval session changed. Retry the request.");
     this.checkPolicy(tool, binding);
     if (contract() !== schema)
       throw new Error(`Tool contract changed for ${tool.name}. Request approval again.`);
-    if (decision === true) return;
+    if (decision === true || force) return;
     // Standalone gates cannot turn a conversation choice into a process-wide grant.
     if (!binding || !grant)
       throw new Error(`Cannot remember approval for ${tool.name} without a bound conversation.`);

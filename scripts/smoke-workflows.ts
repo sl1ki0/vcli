@@ -16,8 +16,8 @@ export async function workflowsSmoke(command: string | string[]) {
       if (!system.includes("Preserve the public API"))
         failures.push("Project memory missing from prompt");
       const turn = requests++;
-      if (turn <= 2 && !system.includes("PLAN MODE")) failures.push("Planning mode lost on resume");
-      if (turn > 2 && system.includes("PLAN MODE")) failures.push("Explicit build mode ignored");
+      if (turn <= 3 && !system.includes("PLAN MODE")) failures.push("Planning mode lost on resume");
+      if (turn > 3 && system.includes("PLAN MODE")) failures.push("Explicit build mode ignored");
       const patch = {
         id: `patch-${turn}`,
         type: "function",
@@ -29,22 +29,68 @@ export async function workflowsSmoke(command: string | string[]) {
       const calls =
         turn === 0
           ? [patch]
-          : turn === 3
+          : turn === 1
             ? [
-                patch,
                 {
-                  id: "task",
+                  id: "publish-plan",
                   type: "function",
                   function: {
-                    name: "tasks_update",
+                    name: "plan_publish",
                     arguments: JSON.stringify({
-                      title: "Verify public API",
-                      description: "Confirm the value change",
+                      goal: "Implementation plan: change value and verify the public API",
+                      steps: [
+                        {
+                          id: "value",
+                          description: "Change and verify the value",
+                          dependencies: [],
+                          tools: ["files_patch", "files_read", "tasks_update"],
+                          verificationTool: "files_read",
+                          doneWhen: "Source contains value = 2",
+                        },
+                      ],
+                      risks: [],
+                      assumptions: ["The public API remains unchanged"],
+                      doneWhen: "The value is updated and verified",
                     }),
                   },
                 },
               ]
-            : [];
+            : turn === 4
+              ? [
+                  patch,
+                  {
+                    id: "task",
+                    type: "function",
+                    function: {
+                      name: "tasks_update",
+                      arguments: JSON.stringify({
+                        title: "Verify public API",
+                        description: "Confirm the value change",
+                      }),
+                    },
+                  },
+                  {
+                    id: "verify-file",
+                    type: "function",
+                    function: { name: "files_read", arguments: JSON.stringify({ path: "app.ts" }) },
+                  },
+                ]
+              : turn === 5
+                ? [
+                    {
+                      id: "verify-task",
+                      type: "function",
+                      function: {
+                        name: "plan_task",
+                        arguments: JSON.stringify({
+                          action: "verify",
+                          taskId: "value",
+                          evidenceCallIds: ["patch-4", "verify-file"],
+                        }),
+                      },
+                    },
+                  ]
+                : [];
       const data = [
         {
           choices: [
@@ -54,7 +100,7 @@ export async function workflowsSmoke(command: string | string[]) {
                 ? { tool_calls: calls.map((call, index) => ({ ...call, index })) }
                 : {
                     content:
-                      turn <= 2
+                      turn <= 3
                         ? "# Implementation plan\n\nChange the value and verify the public API."
                         : "Implementation finished.",
                   },
@@ -114,7 +160,7 @@ export async function workflowsSmoke(command: string | string[]) {
       throw new Error("Planning did not deny the attempted edit");
     if (!(await readFile(join(root, "app.ts"), "utf8")).includes("value = 1"))
       throw new Error("Plan mode changed source");
-    if (!(await run("plans", "show")).includes("Implementation plan"))
+    if (!(await run("plan", "show")).includes("Implementation plan"))
       throw new Error("Plan was not saved");
     await run("sessions", "resume", session, "Continue planning", "--json");
     await run("sessions", "resume", session, "Implement the plan", "--build", "--json");
@@ -128,7 +174,7 @@ export async function workflowsSmoke(command: string | string[]) {
     if (!(await readFile(join(root, "app.ts"), "utf8")).includes("value = 1"))
       throw new Error("Rewind failed");
     for (const topic of ["memory", "hooks"]) await run(topic, "show");
-    if (requests !== 5 || failures.length)
+    if (requests !== 7 || failures.length)
       throw new Error(`Workflow fixture: ${requests} requests; ${failures.join("; ")}`);
     return { requests, planProtected: true, resumedPlan: true, tasksPersisted: true, rewind: true };
   } finally {

@@ -2,9 +2,8 @@ import type { PermissionMode } from "@vcli/core";
 import type { PanelChoice, WorkspacePanel } from "./contracts.ts";
 
 export const workspaceCommandList = [
-  { command: "/plan", description: "Explore and plan without editing source" },
+  { command: "/plan", description: "Read-only planning; show|visual|approve|reject saved plan" },
   { command: "/build", description: "Enable implementation under the current permission mode" },
-  { command: "/plans", description: "Read saved implementation plans" },
   { command: "/memory", description: "Inspect loaded project instructions and memory" },
   { command: "/tasks", description: "Inspect persistent tasks and dependencies" },
   {
@@ -21,23 +20,16 @@ export const workspaceCommandList = [
   { command: "/architecture", description: "Full-screen architecture (F3)" },
   { command: "/config", description: "Review connection and settings" },
   { command: "/permission", description: "Change YOLO, ask or read-only during a task (Ctrl+P)" },
-  { command: "/permissions", description: "Alias for /permission; change permissions live" },
-  { command: "/status", description: "View local connection and task status" },
   { command: "/history", description: "Browse and resume saved conversations" },
   { command: "/new", description: "Start a new conversation" },
-  { command: "/sessions", description: "Browse saved conversations" },
   { command: "/plugins", description: "List installed plugins" },
   { command: "/skills", description: "List available skills" },
-  { command: "/observed", description: "Show architecture found in source" },
-  { command: "/intended", description: "Show the intended architecture" },
-  { command: "/changes", description: "Show changes since opening this project" },
+  { command: "/view", description: "Architecture view: observed|intended|changes" },
   { command: "/scan", description: "Refresh source architecture" },
   { command: "/rewind", description: "Restore a file checkpoint by ID" },
   { command: "/stop", description: "Cancel the active response or tool without closing chat" },
   { command: "/exit", description: "Cancel active work, save the conversation and exit CLI" },
-  { command: "/quit", description: "Alias for /exit" },
   { command: "/help", description: "Open the command menu (F1)" },
-  { command: "/commands", description: "Open the command menu" },
 ] as const;
 
 interface MenuActions {

@@ -5,10 +5,12 @@ import {
   type ContextSettings,
   type RuntimeEvent,
   type Session,
+  type RunLimits,
 } from "@vcli/core";
 
 export interface DelegationReservation {
   tokens: number;
+  runLimits?: RunLimits;
   /** Missing usage keeps a conservative charge; settlement must be durable and idempotent. */
   settle(session?: Session): Promise<void>;
 }
@@ -23,6 +25,7 @@ export interface SubagentOptions {
   /** The factory must use a fresh runtime with only local read tools, no shell or delegation. */
   createRuntime(options: {
     settings: Partial<ContextSettings>;
+    runLimits?: RunLimits;
     onEvent(event: RuntimeEvent): Promise<void>;
   }): Pick<AgentRuntime, "run" | "currentSession">;
   reserve(parentSessionId: string, tokens: number): Promise<DelegationReservation>;
@@ -65,6 +68,7 @@ export class SubagentService {
       reservation = await this.options.reserve(parentSessionId, tokens);
       signal.throwIfAborted();
       runtime = this.options.createRuntime({
+        runLimits: reservation.runLimits,
         settings: {
           taskTokens: reservation.tokens,
           promptTokens: 8000,

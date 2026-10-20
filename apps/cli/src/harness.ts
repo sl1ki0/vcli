@@ -28,6 +28,10 @@ import { savePlan } from "./workflows/plans.ts";
 export interface HarnessOptions {
   apiKey?: string;
   mode?: "build" | "plan";
+  policyPath?: string;
+  stateDirectory?: string;
+  /** Resume policy is loaded before constructing any executor. */
+  resumeId?: string;
 }
 
 export async function createHarness(
@@ -52,7 +56,21 @@ export async function createHarness(
       `No ${config.provider} API key configured. Add it with vcli setup or /connect, or set the provider environment variable.`,
     );
   const provider = createProvider({ ...config, apiKey: credential.apiKey });
-  const store = await SqliteSessionStore.open(root);
+  const store = await SqliteSessionStore.open(root, { directory: options.stateDirectory });
+  const previous = options.resumeId ? await store.get(options.resumeId) : undefined;
+  if (options.resumeId && !previous) {
+    store.close();
+    throw new Error(`Session not found: ${options.resumeId}`);
+  }
+  if (
+    previous?.executionPolicy &&
+    options.policyPath &&
+    previous.executionPolicy.path !== options.policyPath
+  ) {
+    store.close();
+    throw new Error("Resume must retain the policy file bound to this run.");
+  }
+  const policyPath = previous?.executionPolicy?.path ?? options.policyPath;
   const registry = new ToolRegistry();
   const manager = new PluginManager(join(configHome(), "extensions"));
   let plugins;
@@ -79,27 +97,29 @@ export async function createHarness(
     approve,
   );
   let discovered = false;
-  let runtime: AgentRuntime;
   registerBuiltins(registry, {
     architecture,
     store,
     skillList: () => skills.map((s) => ({ ...s, name: `${s.plugin}:${s.name}` })),
     loadSkill: (name) => loadSkill(name, skills),
     record: (values) => runtime.record(values),
-    discover: async (_query, signal) => {
+    discover: async (_query, signal, context) => {
       // Local deferred tools remain discoverable when external execution is disabled.
-      if (permissions.mode === "read-only") return;
+      if (permissions.mode === "read-only" || runtime.currentSession?.mode === "plan") return;
+      if (policyPath) return;
       if (discovered || !servers.length) return;
-      await permissions.authorize(
-        {
-          name: "mcp_connect",
-          description: "Start configured MCP server programs or connect to external servers",
-          kind: "execute",
-          inputSchema: {},
-          execute: async () => ({ text: "connected" }),
-        },
-        { servers: servers.map((s) => ({ name: s.name, type: s.type, command: s.command })) },
-      );
+      const connectionTool: ToolDefinition = {
+        name: "mcp_connect",
+        description: "Start configured MCP server programs or connect to external servers",
+        kind: "execute",
+        inputSchema: {},
+        execute: async () => ({ text: "connected" }),
+      };
+      if (context?.effectsAuthorized) permissions.assertAllowed(connectionTool);
+      else
+        await permissions.authorize(connectionTool, {
+          servers: servers.map((s) => ({ name: s.name, type: s.type, command: s.command })),
+        });
       signal.throwIfAborted();
       const tools = await mcp.discover(undefined, signal);
       signal.throwIfAborted();
@@ -118,6 +138,19 @@ export async function createHarness(
       permissions,
       runtime: () => runtime,
       emit,
+      policyPath,
+      stateDirectory: options.stateDirectory,
+      externalStartup: () => ({
+        count:
+          !policyPath &&
+          permissions.mode !== "read-only" &&
+          runtime.currentSession?.mode !== "plan" &&
+          !discovered &&
+          servers.length
+            ? 1
+            : 0,
+        description: `Connect configured MCP servers: ${servers.map((server) => server.name).join(", ")}`,
+      }),
     });
   } catch (error) {
     await mcp.disconnect();
@@ -125,7 +158,7 @@ export async function createHarness(
     throw error;
   }
   diagnostics.push(...workflows.diagnostics);
-  runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({
     root,
     provider,
     tools: registry,
@@ -133,10 +166,15 @@ export async function createHarness(
     store,
     permissions,
     settings: config.context,
+    runLimits: config.runLimits,
+    executionPolicy: policyPath ? { path: policyPath } : undefined,
     onEvent: emit,
     mode: options.mode,
     instructions: workflows.instructions,
     executeTool: workflows.executeTool,
+    beforeTool: workflows.beforeTool,
+    sideEffectCost: workflows.sideEffectCost,
+    inspectUncertain: workflows.inspectUncertain,
     serialTools: workflows.serialTools,
   });
   return {
@@ -149,7 +187,7 @@ export async function createHarness(
       permissions.setMode(options.mode === "plan" ? "read-only" : permission),
     run: async (prompt: string, signal: AbortSignal, resume?: string): Promise<Session> => {
       const session = await runtime.run(prompt, signal, resume);
-      await savePlan(root, session);
+      await savePlan(root, session, { directory: options.stateDirectory });
       return session;
     },
     close: async () => {

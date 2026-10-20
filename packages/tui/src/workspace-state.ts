@@ -87,6 +87,8 @@ export function useWorkspaceState(props: WorkspaceOptions) {
       focus.clearInput();
       focus.returnToInput();
     },
+    plan: conversation.plan,
+    revealPlan: conversation.revealPlan,
   });
   createEffect(() => {
     if (!task.approval()) setApprovalCommand(false);

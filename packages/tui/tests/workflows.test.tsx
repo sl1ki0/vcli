@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import type { ArchitectureGraph, ArchitectureService, Session } from "@vcli/core";
+import {
+  createRunPlan,
+  decideRunPlan,
+  type ArchitectureGraph,
+  type ArchitectureService,
+  type Session,
+} from "@vcli/core";
 import { Workspace } from "../src/workspace.tsx";
 
 const graph: ArchitectureGraph = {
@@ -140,3 +146,104 @@ test("a plan graph preview survives post-task refresh and explicit scanning", as
     setup.renderer.destroy();
   }
 });
+
+test.each([true, false])(
+  "plan starts in chat, opens dependencies locally and saves decision %s",
+  async (approved) => {
+    const plan = createRunPlan(
+      {
+        goal: "Fix order totals",
+        steps: [
+          {
+            id: "inspect",
+            description: "Read order behavior",
+            dependencies: [],
+            tools: ["files_read"],
+            verificationTool: "files_read",
+            doneWhen: "Inputs understood",
+          },
+          {
+            id: "fix",
+            description: "Correct discount calculation",
+            dependencies: ["inspect"],
+            tools: ["files_patch"],
+            verificationTool: "files_patch",
+            doneWhen: "Calculation corrected",
+          },
+          {
+            id: "test",
+            description: "Run unchanged tests",
+            dependencies: ["fix"],
+            tools: ["shell_run"],
+            verificationTool: "shell_run",
+            doneWhen: "Bash exits zero",
+          },
+        ],
+        risks: ["Invalid discount range"],
+        assumptions: ["Tests describe supported behavior"],
+        doneWhen: "Original tests pass",
+      },
+      "plan",
+      "2026-10-20T00:00:00.000Z",
+    );
+    const initial: Session = {
+      ...session,
+      mode: "plan",
+      plan,
+      chat: [
+        {
+          id: `plan:${session.id}:${plan.createdAt}`,
+          role: "assistant",
+          text: "## Execution plan\n\nFix order totals\n\nRead, correct, verify.",
+          status: "complete",
+          createdAt: plan.createdAt,
+        },
+      ],
+    };
+    const decisions: boolean[] = [];
+    let modelCalls = 0;
+    const setup = await testRender(
+      () => (
+        <Workspace
+          root="/project"
+          graph={graph}
+          architecture={architecture}
+          renderer="off"
+          permission="yolo"
+          mode="plan"
+          initialSession={initial}
+          decidePlan={async (decision) => {
+            decisions.push(decision);
+            const next = structuredClone(initial);
+            decideRunPlan(next.plan!, decision);
+            next.mode = decision ? "build" : "plan";
+            return next;
+          }}
+          run={async () => {
+            modelCalls++;
+            return session;
+          }}
+        />
+      ),
+      { width: 120, height: 40, kittyKeyboard: true },
+    );
+    try {
+      await submit(setup, "/plan show");
+      expect(setup.captureCharFrame()).toContain("Fix order totals");
+      expect(setup.captureCharFrame()).not.toContain("STAGE 1");
+      await submit(setup, "/plan visual");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("STAGE 1");
+      expect(frame).toContain("STAGE 3");
+      expect(frame).toContain("← inspect");
+      expect(frame).toContain("← fix");
+      await submit(setup, approved ? "/build" : "/plan reject");
+      expect(decisions).toEqual([approved]);
+      expect(setup.captureCharFrame()).toContain(approved ? "BUILD" : "PLAN");
+      expect(setup.captureCharFrame()).toContain(approved ? "Plan approved" : "Plan rejected");
+      expect(modelCalls).toBe(0);
+    } finally {
+      setup.renderer.destroy();
+    }
+  },
+);

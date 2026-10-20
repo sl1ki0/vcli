@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "commands": {
+    "allow": ["python3 -m unittest -v"],
+    "deny": ["rm -rf ."]
+  },
+  "directories": {
+    "allow": ["."],
+    "deny": ["private"]
+  }
+}

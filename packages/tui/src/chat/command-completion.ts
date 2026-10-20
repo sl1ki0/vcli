@@ -23,7 +23,20 @@ export function commandSuggestions(input: string): CommandSuggestion[] {
               { value: "ask", description: "Approve writes and commands" },
               { value: "read-only", description: "Allow reads only" },
             ]
-          : [];
+          : name === "/plan"
+            ? [
+                { value: "show", description: "Show the structured plan in chat" },
+                { value: "visual", description: "Open the dependency graph" },
+                { value: "approve", description: "Save explicit plan approval and enable build" },
+                { value: "reject", description: "Reject the draft and keep planning read-only" },
+              ]
+            : name === "/view"
+              ? [
+                  { value: "observed", description: "Architecture found in source" },
+                  { value: "intended", description: "Intended architecture" },
+                  { value: "changes", description: "Changes since opening the project" },
+                ]
+              : [];
     return values
       .filter((item) => item.value.startsWith(match[3]!))
       .map((item) => ({ value: `${name} ${item.value}`, description: item.description }));
@@ -33,7 +46,7 @@ export function commandSuggestions(input: string): CommandSuggestion[] {
     .map((item) => ({
       value:
         item.command +
-        (["/permission", "/permissions", "/reasoning", "/open", "/rewind"].includes(item.command)
+        (["/permission", "/reasoning", "/view", "/open", "/rewind"].includes(item.command)
           ? " "
           : ""),
       description: item.description,

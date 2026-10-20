@@ -5,10 +5,11 @@ import { SqliteSessionStore } from "./store.ts";
 export function createWorkspaceHistory(
   root: string,
   select: (sessionId?: string) => void,
+  options: { directory?: string } = {},
 ): WorkspaceSessions {
   return {
     list: async () => {
-      const store = await SqliteSessionStore.open(root);
+      const store = await SqliteSessionStore.open(root, options);
       try {
         return await store.summaries(root);
       } finally {
@@ -16,7 +17,7 @@ export function createWorkspaceHistory(
       }
     },
     open: async (id) => {
-      const store = await SqliteSessionStore.open(root);
+      const store = await SqliteSessionStore.open(root, options);
       try {
         const session = await store.get(id);
         if (!session) throw new Error("That conversation could not be found.");

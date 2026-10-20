@@ -55,6 +55,11 @@ export function Workspace(props: WorkspaceOptions) {
         <text fg="#38bdf8" onMouseDown={() => state.commands.open("reasoning")}>
           Reasoning
         </text>
+        <Show when={state.conversation.plan()}>
+          <text fg="#38bdf8" onMouseDown={() => state.commands.open("plan")}>
+            Plan
+          </text>
+        </Show>
         <Show when={state.running()}>
           <text fg="#fbbf24" onMouseDown={state.stopTask}>
             Stop · Ctrl+C
@@ -86,6 +91,7 @@ export function Workspace(props: WorkspaceOptions) {
                         running={state.running()}
                         onFocus={state.focusChat}
                         onScrollRef={state.setChatScroll}
+                        onOpenPlan={() => state.commands.open("plan")}
                       />
                     </box>
                   </Show>

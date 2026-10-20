@@ -7,6 +7,7 @@ import {
   type PermissionMode,
   type NormalizedMcpServer,
   type ReasoningEffort,
+  type RunLimits,
 } from "@vcli/core";
 import { REASONING_EFFORTS } from "@vcli/providers";
 
@@ -20,6 +21,7 @@ export interface Config {
   reasoning?: ReasoningEffort;
   context: ContextSettings;
   mcpServers: NormalizedMcpServer[];
+  runLimits?: Partial<RunLimits>;
 }
 export type ConfigPatch = Partial<Omit<Config, "context" | "baseURL">> & {
   context?: Partial<Omit<ContextSettings, "taskTokens">> & { taskTokens?: number | null };
@@ -51,11 +53,14 @@ async function readJson(path: string): Promise<ConfigFile> {
   }
 }
 export function validateConfig(config: Config): Config {
+  const permission =
+    ({ safe: "ask", auto: "yolo" } as Record<string, PermissionMode>)[config.permission] ??
+    config.permission;
   if (!["openai", "anthropic", "gemini", "openrouter", "compatible"].includes(config.provider))
     throw new Error("Unknown provider");
   if (config.reasoning !== undefined && !REASONING_EFFORTS.includes(config.reasoning))
     throw new Error("Unknown reasoning effort");
-  if (!["yolo", "ask", "read-only"].includes(config.permission))
+  if (!["yolo", "ask", "read-only"].includes(permission))
     throw new Error("permission must be yolo, ask, or read-only");
   if (!["auto", "kitty", "sixel", "blocks", "off"].includes(config.renderer))
     throw new Error("Unknown renderer");
@@ -92,28 +97,53 @@ export function validateConfig(config: Config): Config {
     }
   }
   if (!Array.isArray(config.mcpServers)) throw new Error("mcpServers must be an array");
+  if (config.runLimits !== undefined) {
+    if (
+      !config.runLimits ||
+      typeof config.runLimits !== "object" ||
+      Array.isArray(config.runLimits)
+    )
+      throw new Error("runLimits must be an object");
+    const names = ["modelRequests", "toolCalls", "sideEffects", "resultBytes"];
+    for (const [key, value] of Object.entries(config.runLimits))
+      if (!names.includes(key) || !Number.isSafeInteger(value) || value < 0)
+        throw new Error(`runLimits.${key} must be a nonnegative safe integer`);
+  }
   // Unknown file fields are retained on disk, never included in runtime/settings snapshots.
   return {
     provider: config.provider,
     model: config.model,
-    permission: config.permission,
+    permission,
     renderer: config.renderer,
     baseURL: config.baseURL,
     contextWindow: config.contextWindow,
     reasoning: config.reasoning ?? "default",
     context: { ...config.context },
     mcpServers: config.mcpServers,
+    ...(config.runLimits ? { runLimits: { ...config.runLimits } } : {}),
   };
 }
 function mergeConfig(...layers: ConfigFile[]): Config {
   let merged: ConfigFile = { ...defaults, context: { ...balanced } };
   for (const layer of layers) {
     if (
+      layer.runLimits !== undefined &&
+      (!layer.runLimits || typeof layer.runLimits !== "object" || Array.isArray(layer.runLimits))
+    )
+      throw new Error("runLimits must be an object");
+    if (
       layer.context !== undefined &&
       (!layer.context || typeof layer.context !== "object" || Array.isArray(layer.context))
     )
       throw new Error("context must be an object");
-    merged = { ...merged, ...layer, context: { ...merged.context, ...layer.context } };
+    merged = {
+      ...merged,
+      ...layer,
+      context: { ...merged.context, ...layer.context },
+      ...(merged.runLimits || layer.runLimits
+        ? { runLimits: { ...merged.runLimits, ...layer.runLimits } }
+        : {}),
+    };
   }
   if (merged.baseURL === null) merged.baseURL = undefined;
   if (merged.context?.taskTokens === null) merged.context.taskTokens = undefined;
@@ -143,7 +173,7 @@ export async function patchConfig(
   patch: ConfigPatch,
   project = true,
 ): Promise<Config> {
-  const allowed = new Set(Object.keys(defaults).concat("baseURL", "contextWindow"));
+  const allowed = new Set(Object.keys(defaults).concat("baseURL", "contextWindow", "runLimits"));
   if (Object.keys(patch).some((key) => !allowed.has(key)))
     throw new Error("Unknown setting; use vcli setup or environment variables for API credentials");
   if (
@@ -158,6 +188,11 @@ export async function patchConfig(
   const current = project ? local : user;
   const next: ConfigFile = { ...current, ...patch };
   if (patch.context !== undefined) next.context = { ...current.context, ...patch.context };
+  if (patch.runLimits !== undefined) {
+    if (!patch.runLimits || typeof patch.runLimits !== "object" || Array.isArray(patch.runLimits))
+      throw new Error("runLimits must be an object");
+    next.runLimits = { ...current.runLimits, ...patch.runLimits };
+  }
   const effective = project ? mergeConfig(user, next) : mergeConfig(next, local);
   if (!project) mergeConfig(next);
   await writeJsonAtomic(
@@ -181,6 +216,11 @@ export async function setConfig(
     "contextWindow",
     "reasoning",
     "mcpServers",
+    "runLimits",
+    "runLimits.modelRequests",
+    "runLimits.toolCalls",
+    "runLimits.sideEffects",
+    "runLimits.resultBytes",
     ...Object.keys(balanced).map((k) => "context." + k),
     "context.taskTokens",
   ];
@@ -190,6 +230,8 @@ export async function setConfig(
     );
   const patch = key.startsWith("context.")
     ? { context: { [key.slice(8)]: value } }
-    : { [key]: value };
+    : key.startsWith("runLimits.")
+      ? { runLimits: { [key.slice(10)]: value } }
+      : { [key]: value };
   await patchConfig(root, patch as ConfigPatch, project);
 }

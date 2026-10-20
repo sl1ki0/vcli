@@ -6,18 +6,15 @@ import {
   type ProviderAdapter,
   type RuntimeEvent,
   type SessionStore,
-  type ToolCall,
-  type ToolContext,
-  type ToolResult,
 } from "@vcli/core";
 import { createCheckpointTools } from "../tools/checkpoints.ts";
 import { createSubagentTool } from "../tools/subagents.ts";
 import { createTaskTools } from "../tools/tasks.ts";
-import { CheckpointService } from "./checkpoints.ts";
-import { loadProjectHooks } from "./hooks.ts";
 import { createMemoryTools, loadProjectMemory } from "./memory.ts";
 import { SubagentService } from "./subagents.ts";
 import { LocalTaskStore } from "./tasks.ts";
+import { createPlanTools } from "../tools/plans.ts";
+import { ProjectToolExecutor } from "./tool-execution.ts";
 
 interface LocalWorkflowOptions {
   root: string;
@@ -28,14 +25,17 @@ interface LocalWorkflowOptions {
   permissions: PermissionGate;
   runtime(): AgentRuntime;
   emit?: (event: RuntimeEvent) => void | Promise<void>;
+  policyPath?: string;
+  stateDirectory?: string;
+  externalStartup?: () => { count: number; description: string };
 }
 
 /** Assemble local capabilities without coupling the portable runtime to disk or subprocesses. */
 export async function createLocalWorkflows(options: LocalWorkflowOptions) {
-  const { root, registry, store, permissions } = options;
+  const { root, registry, store } = options;
+  const executor = await ProjectToolExecutor.create(options);
+  const { policy } = executor;
   let memory = await loadProjectMemory(root);
-  let hooks = await loadProjectHooks(root, permissions);
-  const checkpoints = new CheckpointService(root);
   const emitChild = async (data: Record<string, unknown>, sessionId: string) => {
     const event: RuntimeEvent = {
       type: "subagent",
@@ -51,6 +51,7 @@ export async function createLocalWorkflows(options: LocalWorkflowOptions) {
       const reservation = await options.runtime().reserveDelegation(tokens);
       return {
         tokens: reservation.tokens,
+        runLimits: reservation.runLimits,
         settle: async (child) => {
           await reservation.settle(child);
           const parent = options.runtime().currentSession!;
@@ -70,7 +71,7 @@ export async function createLocalWorkflows(options: LocalWorkflowOptions) {
       };
     },
     onEvent: (update) => emitChild({ ...update }, update.parentSessionId),
-    createRuntime: ({ settings, onEvent }) => {
+    createRuntime: ({ settings, onEvent, runLimits }) => {
       const reads = new ToolRegistry();
       for (const name of [
         "files_read",
@@ -90,72 +91,49 @@ export async function createLocalWorkflows(options: LocalWorkflowOptions) {
         tools: reads,
         permissions: new PermissionGate("read-only"),
         settings,
+        runLimits,
         onEvent,
         instructions: memory.text,
-        mode: "plan",
+        mode: "build",
+        executionPolicy: options.policyPath ? { path: options.policyPath } : undefined,
+        beforeTool: async (call, context) => {
+          await policy.assertTool(call, context);
+          context.authorizePath = (path, write) =>
+            policy.resolvePath(path, { write, allowRoot: true });
+        },
       });
     },
   });
   for (const tool of [
+    ...createPlanTools({
+      getSession: () => options.runtime().currentSession,
+      save: (session) => store.save(session),
+      hasTool: (name) => Boolean(registry.get(name)),
+      emit: async (event) => {
+        await store.append(event);
+        await options.emit?.(event);
+      },
+    }),
     ...createMemoryTools(),
     ...createTaskTools(new LocalTaskStore(root)),
-    ...createCheckpointTools(checkpoints),
+    ...createCheckpointTools(executor.checkpoints),
     createSubagentTool(subagents),
   ])
     registry.register(tool);
 
-  async function executeTool(
-    call: ToolCall,
-    context: ToolContext,
-    execute: () => Promise<ToolResult>,
-  ): Promise<ToolResult> {
-    await hooks.beforeTool(call, context);
-    const checkpoint = await checkpoints.before(call, context);
-    let result: ToolResult;
-    try {
-      result = await execute();
-    } catch (error) {
-      try {
-        await checkpoints.after(checkpoint);
-      } catch {
-        /* Keep the original tool failure. */
-      }
-      if (checkpoint)
-        throw new Error(
-          `${error instanceof Error ? error.message : String(error)}\nFile mutation outcome may be uncertain. Inspect the file and checkpoint before retrying; do not replay automatically.`,
-        );
-      throw error;
-    }
-    // A bookkeeping failure must never disguise a completed edit as a failed mutation.
-    const warnings: string[] = [];
-    try {
-      await checkpoints.after(checkpoint, result);
-    } catch {
-      warnings.push(
-        "Checkpoint finalization failed; inspect the file before retrying. Do not replay the edit.",
-      );
-    }
-    const reports = await hooks.afterTool(call, result, context);
-    for (const report of reports)
-      if (report.status !== "success")
-        warnings.push(
-          `After-tool hook ${report.name}: ${report.status}. Tool outcome is unchanged. ${report.output}`,
-        );
-    const suffix = warnings.length ? `\n${warnings.join("\n")}` : "";
-    return {
-      ...result,
-      text: result.text + suffix,
-      fullOutput: (result.fullOutput ?? result.text) + suffix,
-    };
-  }
   return {
     instructions: async () => {
       memory = await loadProjectMemory(root);
-      hooks = await loadProjectHooks(root, permissions);
+      await executor.reloadHooks();
       return memory.text;
     },
-    serialTools: () => hooks.hasHooks,
+    serialTools: executor.serialTools,
     diagnostics: memory.diagnostics,
-    executeTool,
+    executeTool: executor.executeTool,
+    sideEffectCost: executor.sideEffectCost,
+    beforeTool: executor.beforeTool,
+    inspectUncertain: executor.inspectUncertain,
+    policy,
+    journal: executor.journal,
   };
 }

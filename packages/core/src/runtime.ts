@@ -13,21 +13,22 @@ import type {
   ToolResult,
   Usage,
 } from "./contracts.ts";
-import { balanced, boundText, BudgetContextPlanner, estimateTokens } from "./context.ts";
-import { PermissionGate, ToolRegistry, ToolValidationError } from "./tools.ts";
+import { balanced, BudgetContextPlanner, estimateTokens } from "./context.ts";
+import type { PermissionGate, ToolRegistry } from "./tools.ts";
 
-import { SourceReadCache } from "./source-read-cache.ts";
+import { ToolExecutionController } from "./runtime-tools.ts";
 import { conversation, startMessage } from "./conversation.ts";
 import { reserveDelegation } from "./delegation-budget.ts";
 import { applyToolConversationEvent } from "./tool-history.ts";
-import { recordInvalidToolRequest, resetInvalidToolRequests } from "./invalid-tool-requests.ts";
-
-interface ToolExecution {
-  call: ToolCall;
-  result: ToolResult;
-  blocked?: boolean;
-  interrupted?: boolean;
-}
+import {
+  initializeRunState,
+  PendingApprovalError,
+  reserveModelRequest,
+  RunBudgetError,
+  UncertainToolError,
+  type RunLimits,
+} from "./run-state.ts";
+import { unfinishedPlanTasks } from "./run-plan.ts";
 
 export interface RuntimeOptions {
   root: string;
@@ -41,6 +42,17 @@ export interface RuntimeOptions {
   instructions?: string | (() => Promise<string>);
   serialTools?: () => boolean;
   mode?: "build" | "plan";
+  runLimits?: Partial<RunLimits>;
+  executionPolicy?: { path: string };
+  /** Bounds a single unknown output reservation while leaving room for explicit recovery. */
+  resultBytesPerCall?: number;
+  /** Policy preflight occurs before approval, then again immediately before effects. */
+  beforeTool?: (call: ToolCall, context: ToolContext) => Promise<void>;
+  /** Includes hooks and lazy external startup even when a tool itself is a read. */
+  sideEffectCost?: (call: ToolCall) => number;
+  inspectUncertain?: (call: ToolCall, context: ToolContext) => Promise<string>;
+  /** Failure injection / durable external effect accounting before result persistence. */
+  afterToolEffect?: (call: ToolCall, context: ToolContext, result: ToolResult) => Promise<void>;
   executeTool?: (
     call: ToolCall,
     context: ToolContext,
@@ -50,9 +62,10 @@ export interface RuntimeOptions {
 export class AgentRuntime {
   readonly settings: ContextSettings;
   private session?: Session;
-  private readonly readSpans = new SourceReadCache();
+  private readonly toolExecution: ToolExecutionController;
   constructor(private readonly options: RuntimeOptions) {
     this.settings = { ...balanced, ...options.settings };
+    this.toolExecution = new ToolExecutionController(options, this.settings, this.emit.bind(this));
   }
   get currentSession(): Session | undefined {
     return this.session;
@@ -96,19 +109,42 @@ export class AgentRuntime {
     if (values.pending) ledger.pending = values.pending;
     await this.options.store.save(this.session);
   }
-  async run(prompt: string, signal: AbortSignal, resumeId?: string): Promise<Session> {
-    this.readSpans.clear();
-    const { root, provider, store, architecture, tools } = this.options;
+  private async beginSession(prompt: string, resumeId?: string): Promise<Session> {
+    this.toolExecution.clearReadCache();
+    const { root, provider, store } = this.options;
     this.session = resumeId
       ? await store.get(resumeId)
       : await store.create(root, provider, prompt);
     if (!this.session) throw new Error(`Session not found: ${resumeId}`);
     const session = this.session;
+    initializeRunState(session, this.options.runLimits);
+    if (
+      session.executionPolicy &&
+      this.options.executionPolicy?.path !== session.executionPolicy.path
+    )
+      throw new Error("Resume must retain the saved execution policy.");
+    session.executionPolicy ??= this.options.executionPolicy;
     session.instructions =
       typeof this.options.instructions === "function"
         ? await this.options.instructions()
         : this.options.instructions;
+    if (
+      session.mode === "plan" &&
+      this.options.mode === "build" &&
+      session.plan?.status !== "approved"
+    )
+      throw new Error(
+        "Approve a saved structured plan before entering build mode. A plain-text plan cannot authorize execution.",
+      );
     session.mode = this.options.mode ?? session.mode ?? "build";
+    if (
+      prompt &&
+      session.plan?.status === "approved" &&
+      !unfinishedPlanTasks(session.plan).length
+    ) {
+      session.planHistory = [...(session.planHistory ?? []), session.plan];
+      session.plan = undefined;
+    }
     if (session.root !== root) throw new Error("Session belongs to a different project.");
     this.options.permissions.bindSession(session, () => store.save(session));
     conversation(session);
@@ -134,6 +170,11 @@ export class AgentRuntime {
         text: user.text,
         createdAt: user.createdAt,
       });
+    return session;
+  }
+  async run(prompt: string, signal: AbortSignal, resumeId?: string): Promise<Session> {
+    const session = await this.beginSession(prompt, resumeId);
+    const { store, architecture, root } = this.options;
     if (session.invalidToolRequests?.blocked) {
       session.status = "failed";
       await this.recoverInterruptedCalls(session);
@@ -145,9 +186,35 @@ export class AgentRuntime {
       return session;
     }
     let graph: ArchitectureGraph;
+    let completionError: string | undefined;
     try {
       graph = await architecture.scan(root);
       await this.recoverInterruptedCalls(session);
+      if (session.runState!.aborted) {
+        session.status = "failed";
+        await store.save(session);
+        return session;
+      }
+      const uncertain = Object.values(session.runState!.calls).find(
+        (entry) => entry.status === "uncertain",
+      );
+      if (uncertain) throw new UncertainToolError(uncertain.call.id);
+      if (
+        !prompt &&
+        !session.runState!.pending.length &&
+        session.plan?.status === "approved" &&
+        !unfinishedPlanTasks(session.plan).length
+      ) {
+        session.status = "complete";
+        await store.save(session);
+        await this.emit("status", { status: session.status });
+        return session;
+      }
+      if (session.runState!.pending.length) {
+        const pending = session.runState!.pending.map((id) => session.runState!.calls[id]!.call);
+        if (await this.toolExecution.executeBatch(session, pending, signal))
+          graph = await architecture.scan(root);
+      }
       await this.emit("architecture", { revision: graph.revision, graph });
       for (let turn = 0; turn < this.settings.maxTurns; turn++) {
         signal.throwIfAborted();
@@ -159,10 +226,24 @@ export class AgentRuntime {
         await this.reportCompaction(session, request);
         const calls = await this.infer(session, request, signal);
         if (!calls.length) {
-          session.status = "complete";
+          session.status =
+            session.mode === "plan"
+              ? session.plan?.status === "draft"
+                ? "awaiting-plan"
+                : "failed"
+              : session.plan && unfinishedPlanTasks(session.plan).length
+                ? "failed"
+                : "complete";
+          if (session.status === "failed") {
+            completionError =
+              session.mode === "plan"
+                ? "Plan mode requires a saved structured plan. Publish one with plan_publish before requesting approval."
+                : "The model stopped before all plan tasks had verified results.";
+            session.ledger.constraints.push(completionError);
+          }
           break;
         }
-        const mutated = await this.executeBatch(session, calls, signal);
+        const mutated = await this.toolExecution.executeBatch(session, calls, signal);
         if (mutated) {
           graph = await architecture.scan(root);
           await this.emit("architecture", { graph, revision: graph.revision });
@@ -174,11 +255,22 @@ export class AgentRuntime {
         if (turn === this.settings.maxTurns - 1) session.status = "budget";
       }
     } catch (error) {
-      session.status = signal.aborted ? "aborted" : "failed";
+      session.status = signal.aborted
+        ? "aborted"
+        : error instanceof RunBudgetError
+          ? "budget"
+          : error instanceof PendingApprovalError
+            ? "awaiting-approval"
+            : error instanceof UncertainToolError
+              ? "uncertain"
+              : "failed";
       for (const message of conversation(session))
-        if (message.tool?.state === "requested" || message.tool?.state === "running") {
+        if (
+          (session.status === "failed" || session.status === "aborted") &&
+          (message.tool?.state === "requested" || message.tool?.state === "running")
+        ) {
           message.tool.state = "interrupted";
-          message.status = session.status;
+          message.status = signal.aborted ? "aborted" : "failed";
           message.text = "No completion was recorded. Inspect current state before retrying.";
         }
       await store.save(session);
@@ -186,33 +278,75 @@ export class AgentRuntime {
         status: session.status,
         error: error instanceof Error ? error.message : String(error),
       });
-      if (!signal.aborted) throw error;
+      if (
+        !signal.aborted &&
+        !(error instanceof RunBudgetError) &&
+        !(error instanceof PendingApprovalError) &&
+        !(error instanceof UncertainToolError)
+      )
+        throw error;
     }
     await store.save(session);
     await this.emit("status", {
       status: session.status,
       ...(session.invalidToolRequests?.blocked
         ? { error: session.invalidToolRequests.blocked.reason }
-        : {}),
+        : completionError
+          ? { error: completionError }
+          : {}),
     });
     return session;
   }
 
   private async recoverInterruptedCalls(session: Session): Promise<void> {
     const { store } = this.options;
+    const state = session.runState!;
+    for (const entry of Object.values(state.calls))
+      if (entry.status === "started" || entry.status === "uncertain") {
+        entry.status = "uncertain";
+        let inspection = "";
+        if (this.options.inspectUncertain)
+          inspection = await this.options.inspectUncertain(entry.call, {
+            root: session.root,
+            signal: new AbortController().signal,
+            sessionId: session.id,
+          });
+        if (inspection) {
+          const digest = Array.from(
+            new Uint8Array(
+              await crypto.subtle.digest("SHA-256", new TextEncoder().encode(inspection)),
+            ),
+            (byte) => byte.toString(16).padStart(2, "0"),
+          ).join("");
+          if (entry.inspection?.digest !== digest)
+            entry.inspection = {
+              digest,
+              artifact: await store.putArtifact(session.id, inspection),
+            };
+        }
+        const prefix = `Uncertain tool call ${entry.call.id}:`;
+        const constraint = `${prefix} previous ${entry.call.name} has an uncertain outcome. Inspect state before any related action; do not replay it.${entry.inspection ? ` Recovery inspection artifact: ${entry.inspection.artifact}.` : ""}`;
+        session.ledger.constraints = session.ledger.constraints.filter(
+          (item) => !item.startsWith(prefix),
+        );
+        session.ledger.constraints.push(constraint);
+      }
     const uncertain = await store.pendingMutations(session.id);
-    for (const name of uncertain)
-      session.ledger.constraints.push(
-        `Previous ${name} has an uncertain outcome. Inspect state before any related action; do not replay it.`,
-      );
-    // Close unfinished call groups without repeating their effects.
+    for (const name of uncertain) {
+      const constraint = `Previous ${name} has an uncertain outcome. Inspect state before any related action; do not replay it.`;
+      if (!session.ledger.constraints.includes(constraint))
+        session.ledger.constraints.push(constraint);
+    }
     const completed = new Set(
       session.messages.filter((m) => m.role === "tool").map((m) => m.toolCallId),
     );
-    for (const m of [...session.messages])
-      for (const call of m.toolCalls ?? [])
+    for (const message of [...session.messages])
+      for (const call of message.toolCalls ?? []) {
+        const entry = Object.hasOwn(state.calls, call.id) ? state.calls[call.id] : undefined;
+        // Reserved/approval calls belong to a durable batch and resume without another model request.
+        if (entry && entry.status !== "uncertain") continue;
         if (!completed.has(call.id)) {
-          await this.recordToolResult(session, {
+          await this.toolExecution.recordResult(session, {
             call,
             result: {
               text: "Interrupted before a recorded result. Outcome uncertain; inspect current state. Do not replay automatically.",
@@ -222,12 +356,15 @@ export class AgentRuntime {
           });
           completed.add(call.id);
         }
+      }
 
     await store.save(session);
   }
 
   private prepareRequest(session: Session, graph: ArchitectureGraph): ModelRequest | undefined {
     const { provider, tools } = this.options;
+    if (session.mode === "plan") tools.activate(["plan_publish"]);
+    if (session.plan?.status === "approved") tools.activate(["plan_task"]);
     const request = new BudgetContextPlanner().build(
       session,
       graph,
@@ -271,6 +408,7 @@ export class AgentRuntime {
       estimateTokens(
         request.system + JSON.stringify(request.messages) + JSON.stringify(request.tools),
       ) + request.maxOutputTokens;
+    reserveModelRequest(session.runState!);
     session.budgetSpent = spent + reservation;
     // Save before inference: cancellation or absent usage must not reset a budget.
     await store.save(session);
@@ -321,137 +459,5 @@ export class AgentRuntime {
     await this.emit("usage", { usage, total: session.usage });
 
     return calls;
-  }
-
-  private async executeTool(
-    session: Session,
-    call: ToolCall,
-    signal: AbortSignal,
-  ): Promise<ToolExecution> {
-    const { tools, root } = this.options;
-    await this.emit("tool-request", {
-      callId: call.id,
-      name: call.name,
-      kind: tools.get(call.name)?.kind,
-      arguments: call.arguments,
-    });
-    const blockedResult = (): ToolExecution => ({
-      call,
-      result: {
-        text: session.invalidToolRequests!.blocked!.reason,
-        isError: true,
-      },
-      blocked: true,
-    });
-    if (session.invalidToolRequests?.blocked) return blockedResult();
-    try {
-      const tool = tools.validate(call);
-      if (resetInvalidToolRequests(session, call.name)) await this.options.store.save(session);
-      if (session.invalidToolRequests?.blocked) return blockedResult();
-      if (session.mode === "plan" && tool.kind !== "read")
-        throw new Error(`Plan mode denies ${tool.name}. Switch to build mode to implement.`);
-      await this.options.permissions.authorize(tool, call.arguments);
-      if (session.invalidToolRequests?.blocked) return blockedResult();
-      // Durable start precedes the side effect.
-      await this.emit("tool-start", {
-        callId: call.id,
-        name: call.name,
-        kind: tool.kind,
-        arguments: call.arguments,
-      });
-      const context = { root, signal, sessionId: session.id };
-      const result = await tools.executeWith(call, context, (execute) =>
-        this.options.executeTool ? this.options.executeTool(call, context, execute) : execute(),
-      );
-      return { call, result };
-    } catch (error) {
-      if (signal.aborted) throw error;
-      let text = error instanceof Error ? error.message : String(error);
-      let blocked = false;
-      if (error instanceof ToolValidationError) {
-        text = recordInvalidToolRequest(session, call.name, error);
-        blocked = Boolean(session.invalidToolRequests?.blocked);
-        // Counts and the stop decision must survive a restart before another call can run.
-        await this.options.store.save(session);
-      }
-      return {
-        call,
-        result: {
-          text,
-          isError: true,
-        },
-        blocked,
-      };
-    }
-  }
-
-  private async recordToolResult(
-    session: Session,
-    { call, result, blocked, interrupted }: ToolExecution,
-  ): Promise<void> {
-    const { store } = this.options;
-    const full = result.fullOutput ?? result.text;
-    const artifact = await store.putArtifact(session.id, full);
-    const content = this.readSpans.deduplicate(call, result, artifact);
-    const output = `${boundText(content, this.settings.resultTokens)}\nFull result: ${artifact}`;
-    session.messages.push({
-      role: "tool",
-      text: output,
-      toolCallId: call.id,
-      toolName: call.name,
-    });
-    session.ledger.touchedPaths = [
-      ...new Set([...session.ledger.touchedPaths, ...(result.changedPaths ?? [])]),
-    ];
-    if (call.name === "shell_run") session.ledger.verification.push(boundText(result.text, 400));
-    // Save provider result and terminal presentation together before publication.
-    await this.emit(
-      "tool-end",
-      {
-        callId: call.id,
-        name: call.name,
-        kind: this.options.tools.get(call.name)?.kind,
-        arguments: call.arguments,
-        result: output,
-        artifact,
-        isError: result.isError ?? false,
-        blocked: blocked ?? false,
-        interrupted: interrupted ?? false,
-        details: result.details,
-        changedPaths: result.changedPaths,
-      },
-      { saveSession: true },
-    );
-  }
-
-  private async executeBatch(
-    session: Session,
-    calls: ToolCall[],
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    const { tools } = this.options;
-    let mutated = false;
-    const execute = (call: ToolCall) => this.executeTool(session, call, signal);
-    const recordResult = (result: ToolExecution) => this.recordToolResult(session, result);
-    // Read batches may run concurrently; writes and arbitrary shell effects form barriers.
-    for (let i = 0; i < calls.length; ) {
-      if (tools.get(calls[i]!.name)?.kind === "read" && !this.options.serialTools?.()) {
-        const reads: ToolCall[] = [];
-        while (i < calls.length && reads.length < 4 && tools.get(calls[i]!.name)?.kind === "read")
-          reads.push(calls[i++]!);
-        // Drain every child before propagating cancellation: their usage and mutation
-        // records must be durable before the host closes the session store.
-        const results = await Promise.allSettled(reads.map(execute));
-        for (const result of results)
-          if (result.status === "fulfilled") await recordResult(result.value);
-        const failed = results.find((result) => result.status === "rejected");
-        if (failed?.status === "rejected") throw failed.reason;
-      } else {
-        await recordResult(await execute(calls[i++]!));
-        mutated = true;
-      }
-    }
-
-    return mutated;
   }
 }

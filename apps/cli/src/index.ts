@@ -10,6 +10,7 @@ import { pluginsCommand } from "./commands/plugins.ts";
 import { sessionsCommand } from "./commands/sessions.ts";
 import { runCommand } from "./commands/run.ts";
 import { workflowsCommand } from "./commands/workflows.ts";
+import { runOptions } from "./run-options.ts";
 export { printTree } from "./io.ts";
 
 async function main(): Promise<void> {
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     case "tasks":
     case "checkpoints":
       return workflowsCommand(command, action, rest, context);
+    case "plan":
     case "plans":
       return workflowsCommand("plan", action, rest, context);
     case "architecture":
@@ -44,11 +46,13 @@ async function main(): Promise<void> {
       return interactive(root, config, architecture, await architecture.scan(root), {
         overrides: configOverrides(values),
         initialCommand: "/connect",
+        ...runOptions(values),
       });
     case undefined:
       return interactive(root, config, architecture, await architecture.scan(root), {
         overrides: configOverrides(values),
         mode: values.plan ? "plan" : "build",
+        ...runOptions(values),
       });
     default:
       throw new Error("Unknown command " + command + ". Use --help.");

@@ -132,9 +132,10 @@ describe("conversation workspace", () => {
       expect(setup.captureCharFrame()).toContain("/plugins");
       expect(setup.captureCharFrame()).not.toContain("/connect ·");
       setup.mockInput.pressArrow("down");
+      setup.mockInput.pressArrow("down");
       setup.mockInput.pressTab();
       await setup.flush();
-      expect(input(setup).value).toBe("/plans");
+      expect(input(setup).value).toBe("/plugins");
       expect(input(setup).focused).toBe(true);
       expect(setup.renderer.root.findDescendantById("command-suggestions")).toBeUndefined();
       expect(calls).toBe(0);
@@ -202,10 +203,10 @@ describe("conversation workspace", () => {
       await setup.mockInput.typeText("/");
       setup.mockInput.pressArrow("up");
       await setup.flush();
-      expect(setup.captureCharFrame()).toContain("› /commands");
+      expect(setup.captureCharFrame()).toContain("› /help");
       setup.resize(50, 18);
       await setup.flush();
-      expect(setup.captureCharFrame()).toContain("› /commands");
+      expect(setup.captureCharFrame()).toContain("› /help");
       expect(input(setup).y).toBeLessThan(17);
       setup.mockInput.pressArrow("down");
       await setup.flush();
@@ -978,6 +979,45 @@ test("conversation reconciliation retains exact durable turns and hides empty to
           ],
         }).map((message) => message.text),
       ).toEqual(["Legacy prompt", "Legacy answer"]);
+    } finally {
+      dispose();
+    }
+  });
+});
+
+test.each([
+  ["awaiting-plan", "Ready · awaiting plan approval"],
+  ["awaiting-approval", "Ready · action approval required"],
+  ["uncertain", "Uncertain outcome · inspect and resolve before continuing"],
+] as const)("conversation exposes %s as a durable action-needed phase", (status, label) => {
+  createRoot((dispose) => {
+    try {
+      const waiting: Session = {
+        ...session,
+        status,
+        chat: [
+          {
+            id: "waiting-reply",
+            role: "assistant",
+            text: "Saved progress",
+            createdAt: session.createdAt,
+            status: "complete",
+          },
+        ],
+      };
+      const conversation = createConversation(waiting);
+      expect(conversation.phase()).toBe(label);
+      conversation.clear();
+      conversation.restore(waiting);
+      expect(conversation.phase()).toBe(label);
+      conversation.send("Continue");
+      conversation.finish(waiting);
+      expect(conversation.phase()).toBe(label);
+      expect(conversation.messages()[0]).toMatchObject({
+        text: "Saved progress",
+        status: "complete",
+      });
+      expect(conversation.phase()).not.toContain("Failed");
     } finally {
       dispose();
     }

@@ -1,3 +1,5 @@
+import type { RunState } from "./run-state.ts";
+import type { RunPlanState } from "./run-plan.ts";
 export type PermissionMode = "yolo" | "ask" | "read-only";
 export type ReasoningEffort =
   | "default"
@@ -19,6 +21,8 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** Assigned task while executing an approved structured plan. */
+  taskId?: string;
 }
 export interface Message {
   role: "user" | "assistant" | "tool";
@@ -112,6 +116,14 @@ export interface ToolContext {
   root: string;
   signal: AbortSignal;
   sessionId: string;
+  taskId?: string;
+  /** Maximum UTF-8 bytes the executor may return for this attempt. */
+  resultBytes?: number;
+  /** External policy may require explicit approval even in YOLO mode. */
+  requireApproval?: boolean;
+  effectSummary?: string;
+  effectsAuthorized?: boolean;
+  authorizePath?: (path: string, write?: boolean) => Promise<string>;
 }
 export interface ToolResult {
   text: string;
@@ -119,10 +131,16 @@ export interface ToolResult {
   details?: unknown;
   changedPaths?: string[];
   isError?: boolean;
+  /** True when the run result budget cut the returned output. */
+  incomplete?: boolean;
+  /** Effects succeeded but external journal finalization needs explicit recovery. */
+  outcomeUncertain?: boolean;
 }
 export interface ToolDefinition extends ToolSchema {
   kind: ToolKind;
   eager?: boolean;
+  /** Only operations with repeatable semantics may opt in to crash retries. */
+  retrySafe?: boolean;
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }
 export type ApprovalDecision = boolean | "always";
@@ -139,7 +157,15 @@ export interface Session {
   root: string;
   provider: string;
   model: string;
-  status: "running" | "complete" | "failed" | "aborted" | "budget";
+  status:
+    | "running"
+    | "complete"
+    | "failed"
+    | "aborted"
+    | "budget"
+    | "awaiting-approval"
+    | "awaiting-plan"
+    | "uncertain";
   createdAt: string;
   updatedAt: string;
   messages: Message[];
@@ -154,6 +180,12 @@ export interface Session {
   /** Refreshed local instructions; counted within the active prompt budget. */
   instructions?: string;
   mode?: "build" | "plan";
+  plan?: RunPlanState;
+  /** Completed plans remain retrievable without occupying provider context. */
+  planHistory?: RunPlanState[];
+  /** Durable execution identities, approvals and resource reservations. */
+  runState?: RunState;
+  executionPolicy?: { path: string };
   /** Conversation-scoped grants; schema digests contain no supplied argument values. */
   toolApprovals?: {
     sessionId: string;
@@ -201,7 +233,8 @@ export interface RuntimeEvent {
     | "compaction"
     | "status"
     | "approval"
-    | "subagent";
+    | "subagent"
+    | "plan";
   sessionId: string;
   time: string;
   data: Record<string, unknown>;

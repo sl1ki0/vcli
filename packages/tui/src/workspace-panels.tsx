@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { WorkspaceCommands } from "./workspace-commands.ts";
+import { PlanView } from "./plan-view.tsx";
 
 function SettingsSummary(props: { commands: WorkspaceCommands }) {
   const settings = props.commands.settings;
@@ -63,6 +64,8 @@ export function WorkspacePanels(props: {
         return "Workspace status";
       case "read":
         return commands.readTitle();
+      case "plan":
+        return "Execution plan · dependency view";
       case "connect":
         return commands.connection.step() === "storage" ? "Key storage" : "Connect provider";
     }
@@ -176,6 +179,9 @@ export function WorkspacePanels(props: {
         </Show>
         <Show when={commands.panel() === "read"}>
           <text fg="#b8c4d2">{commands.readContent()}</text>
+        </Show>
+        <Show when={commands.panel() === "plan" && commands.plan()}>
+          <PlanView plan={commands.plan()!} />
         </Show>
         <For each={commands.choices()}>
           {(item, index) => (

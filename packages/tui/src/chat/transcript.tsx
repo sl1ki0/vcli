@@ -11,6 +11,7 @@ export function ChatTranscript(props: {
   running: boolean;
   onFocus(): void;
   onScrollRef(value: ScrollBoxRenderable): void;
+  onOpenPlan?(): void;
 }) {
   const style = createChatStyle();
   const renderer = useRenderer();
@@ -25,7 +26,12 @@ export function ChatTranscript(props: {
     if (!request) return;
     // New user turns rejoin the live conversation once. Streaming never resets manual scroll.
     const reveal = () => {
-      if (scroll && !scroll.isDestroyed) scroll.scrollTo(scroll.scrollHeight);
+      if (scroll && !scroll.isDestroyed) {
+        const plan = request.startsWith("plan:")
+          ? scroll.content.findDescendantById(`message-${request}`)
+          : undefined;
+        scroll.scrollTo(plan ? plan.y - scroll.content.y : scroll.scrollHeight);
+      }
       props.conversation.acknowledgeReveal(request);
     };
     renderer.once("frame", reveal);
@@ -142,6 +148,11 @@ export function ChatTranscript(props: {
                   }
                 >
                   <ToolActivity message={message()} conversation={props.conversation} />
+                </Show>
+                <Show when={message().id.startsWith("plan:") && props.onOpenPlan}>
+                  <text fg="#38bdf8" onMouseDown={() => props.onOpenPlan?.()}>
+                    Open dependency view · /plan visual
+                  </text>
                 </Show>
               </box>
             )}

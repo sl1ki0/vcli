@@ -29,4 +29,5 @@ export type WorkspacePanel =
   | "history"
   | "open"
   | "status"
+  | "plan"
   | "read";

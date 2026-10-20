@@ -48,6 +48,25 @@ export function sessionMessages(session: Session): ChatMessage[] {
   );
 }
 
+function displayedPlan(session?: Session): RunPlanState | undefined {
+  return session?.plan ?? session?.planHistory?.at(-1);
+}
+
+function settledPhase(
+  runStatus: Session["status"] | undefined,
+  result: "complete" | "failed" | "aborted" = "complete",
+  restored = false,
+): string {
+  if (runStatus === "awaiting-plan") return "Ready · awaiting plan approval";
+  if (runStatus === "awaiting-approval") return "Ready · action approval required";
+  if (runStatus === "uncertain") return "Uncertain outcome · inspect and resolve before continuing";
+  if (result === "aborted")
+    return restored
+      ? "Interrupted · send a message to continue"
+      : "Canceled · send a message to continue";
+  return result === "failed" ? "Failed · see task activity" : "Ready";
+}
+
 /** The visible conversation survives model-context compaction and separate task turns. */
 export function createConversation(
   initial?: Session,
@@ -57,8 +76,8 @@ export function createConversation(
     initial ? sessionMessages(initial) : [],
   );
   const [session, setSession] = createSignal(initial);
-  const [plan, setPlan] = createSignal<RunPlanState | undefined>(initial?.plan);
-  const [phase, setPhase] = createSignal("Ready");
+  const [plan, setPlan] = createSignal<RunPlanState | undefined>(displayedPlan(initial));
+  const [phase, setPhase] = createSignal(settledPhase(initial?.status));
   const [selected, setSelected] = createSignal<string>();
   const [expandedReasoning, setExpandedReasoning] = createSignal<Set<string>>(new Set());
   const [expandedTools, setExpandedTools] = createSignal<Set<string>>(new Set());
@@ -197,7 +216,7 @@ export function createConversation(
   function restore(next: Session) {
     artifactGeneration++;
     setSession(next);
-    setPlan(next.plan);
+    setPlan(displayedPlan(next));
     setMessages(sessionMessages(next));
     pendingUser = undefined;
     assistantId = undefined;
@@ -207,13 +226,13 @@ export function createConversation(
     setExpandedReasoning(new Set<string>());
     setExpandedTools(new Set<string>());
     setArtifacts({});
-    setPhase(next.status === "aborted" ? "Interrupted · send a message to continue" : "Ready");
+    setPhase(settledPhase(next.status, next.status === "aborted" ? "aborted" : "complete", true));
   }
   function finish(next?: Session, status: "complete" | "failed" | "aborted" = "complete") {
     if (next?.chat) {
       const failed = messages().filter((message) => localFailures.has(message.id));
       setSession(next);
-      setPlan(next.plan);
+      setPlan(displayedPlan(next));
       const durable = sessionMessages(next);
       const restored = [
         ...durable,
@@ -230,7 +249,7 @@ export function createConversation(
     } else {
       if (next) {
         setSession(next);
-        setPlan(next.plan);
+        setPlan(displayedPlan(next));
       }
       setMessages((previous) =>
         interruptUnfinishedTools(previous, status).map((message) =>
@@ -244,13 +263,7 @@ export function createConversation(
         pendingUser = undefined;
       }
     }
-    setPhase(
-      status === "aborted"
-        ? "Canceled · send a message to continue"
-        : status === "failed"
-          ? "Failed · see task activity"
-          : "Ready",
-    );
+    setPhase(settledPhase(next?.status, status));
   }
   function clear() {
     artifactGeneration++;

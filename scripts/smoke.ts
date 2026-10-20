@@ -11,6 +11,7 @@ import { cancellationSmoke } from "./smoke-cancel.ts";
 import { livePermissionsSmoke } from "./smoke-live-permissions.ts";
 import { approvalSmoke } from "./smoke-approval.ts";
 import { toolHistorySmoke } from "./smoke-tool-history.ts";
+import { planSmoke } from "./smoke-plan.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "vcli-packaged-"));
 const binary = join(directory, "vcli");
@@ -64,6 +65,7 @@ try {
   await onboardingSmoke(binary);
   await chatSmoke(binary);
   await workflowsSmoke(binary);
+  await planSmoke(binary);
   await approvalSmoke(binary);
   await livePermissionsSmoke(binary);
   await cancellationSmoke(binary);

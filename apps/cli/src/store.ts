@@ -11,9 +11,14 @@ export class SqliteSessionStore implements SessionStore {
     private readonly db: Database,
     private readonly artifactRoot: string,
   ) {}
-  static async open(root: string): Promise<SqliteSessionStore> {
-    const directory = join(root, ".vcli", "state");
-    const artifacts = join(root, ".vcli", "artifacts");
+  static async open(
+    root: string,
+    options: { directory?: string } = {},
+  ): Promise<SqliteSessionStore> {
+    const directory = options.directory ?? join(root, ".vcli", "state");
+    const artifacts = options.directory
+      ? join(directory, "artifacts")
+      : join(root, ".vcli", "artifacts");
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await mkdir(artifacts, { recursive: true, mode: 0o700 });
     const db = new Database(join(directory, "sessions.sqlite"), { create: true });

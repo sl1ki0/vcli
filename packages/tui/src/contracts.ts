@@ -74,6 +74,8 @@ export interface WorkspaceOptions {
   readArtifact?: (id: string) => Promise<string>;
   mode?: "build" | "plan";
   changeMode?: (mode: "build" | "plan") => void;
+  /** Save an explicit human plan decision locally; this never invokes a model. */
+  decidePlan?: (approved: boolean) => Promise<Session>;
   rewind?: (
     id: string,
     approve: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<boolean>,

@@ -4,6 +4,8 @@ import { createHarness } from "../harness.ts";
 import { SqliteSessionStore } from "../store.ts";
 import { print, confirm, writeOutput } from "../io.ts";
 import type { CommandContext } from "./context.ts";
+import { runOptions, storeOptions } from "../run-options.ts";
+import { decidePlan } from "../workflows/run-controls.ts";
 export async function runCommand(
   prompt: string,
   resume: string | undefined,
@@ -13,7 +15,7 @@ export async function runCommand(
   let mode: "build" | "plan" = values.plan ? "plan" : "build";
   if (!resume && !prompt) throw new Error("Task required: vcli run <task>");
   if (resume) {
-    const store = await SqliteSessionStore.open(root);
+    const store = await SqliteSessionStore.open(root, storeOptions(values));
     const session = await store.get(resume);
     store.close();
     if (!session) throw new Error("Session not found");
@@ -22,6 +24,8 @@ export async function runCommand(
       config.model = session.model;
     }
     if (!values.plan && !values.build) mode = session.mode ?? "build";
+    if (values.build && session.plan?.status === "draft")
+      await decidePlan(root, session.id, true, runOptions(values));
   }
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -36,8 +40,10 @@ export async function runCommand(
     config,
     architecture,
     emit,
-    (tool, args) => confirm(tool, args, controller.signal),
-    { mode },
+    process.stdin.isTTY && process.stderr.isTTY
+      ? (tool, args) => confirm(tool, args, controller.signal)
+      : undefined,
+    { mode, ...runOptions(values), resumeId: resume },
   );
   process.once("SIGINT", cancel);
   try {
@@ -46,7 +52,20 @@ export async function runCommand(
       await print(
         `\nSession ${session.id} · ${session.status} · ${session.usage.input + session.usage.output} tokens`,
       );
-    if (session.status !== "complete") process.exitCode = session.status === "aborted" ? 130 : 1;
+    if (session.status !== "complete") {
+      process.exitCode = ["awaiting-plan", "awaiting-approval"].includes(session.status)
+        ? 0
+        : session.status === "aborted"
+          ? 130
+          : 1;
+      if (
+        !values.json &&
+        ["awaiting-approval", "awaiting-plan", "uncertain"].includes(session.status)
+      )
+        await print(
+          `Inspect: vcli sessions show ${session.id}\nResume: vcli sessions resume ${session.id}`,
+        );
+    }
   } finally {
     process.off("SIGINT", cancel);
     await harness.close();

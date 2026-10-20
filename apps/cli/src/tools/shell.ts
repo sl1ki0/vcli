@@ -5,27 +5,43 @@ import { objectSchema, stringSchema } from "./schema.ts";
 export const shellTool: ToolDefinition = {
   name: "shell_run",
   description:
-    "Run a shell command for builds, tests, Git, or other tasks. This can have arbitrary side effects. Uses the active permission mode.",
+    "Run a Bash command in a project directory for builds, tests, Git, or other tasks. Returns stdout, stderr and exit code. Arbitrary side effects require the active permissions and optional policy.",
   kind: "execute",
   inputSchema: objectSchema(
     {
       command: stringSchema,
+      cwd: stringSchema,
       timeoutMs: { type: "integer", minimum: 100, maximum: 600_000 },
+      maxOutputBytes: { type: "integer", minimum: 1, maximum: 33_554_432 },
     },
     ["command"],
   ),
   async execute(args, context) {
     const result = await executeProcess(
-      process.env.SHELL ?? "/bin/sh",
-      ["-c", String(args.command)],
+      "/bin/bash",
+      ["--noprofile", "--norc", "-c", args.command as string],
       context,
-      Number(args.timeoutMs ?? 120_000),
+      (args.timeoutMs as number | undefined) ?? 120_000,
+      {
+        cwd: args.cwd as string | undefined,
+        outputLimitBytes: args.maxOutputBytes as number | undefined,
+      },
     );
-    const full = `Exit ${result.code}\n${result.output}`;
+    const limit = result.truncated ? "\nOutput incomplete: process output limit reached." : "";
+    const timeout = result.timedOut ? "\nProcess timed out and was terminated." : "";
+    const full = `Exit ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}${limit}${timeout}`;
     return {
       text: boundText(full, 3_000),
       fullOutput: full,
       isError: result.code !== 0,
+      details: {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.code,
+        cwd: result.cwd,
+        truncated: result.truncated,
+        timedOut: result.timedOut,
+      },
     };
   },
 };

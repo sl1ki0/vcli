@@ -44,6 +44,7 @@
         "*.md",
         "*.toml",
         "bun.lock",
+        "eslint.config.js",
         ".gitignore",
         ".vcli/"
       ],
