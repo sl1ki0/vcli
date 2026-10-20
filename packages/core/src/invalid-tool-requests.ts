@@ -1,5 +1,5 @@
 import type { Session } from "./contracts.ts";
-import { ToolValidationError } from "./tools.ts";
+import type { ToolValidationError } from "./tools.ts";
 
 const retryLimit = 3;
 

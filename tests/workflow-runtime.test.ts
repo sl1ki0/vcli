@@ -68,7 +68,6 @@ async function fixture(
   const permissions = new PermissionGate(
     options.mode === "plan" ? "read-only" : (options.permission ?? "yolo"),
   );
-  let runtime: AgentRuntime;
   let mcpStarted = false;
   const mcpConnect: ToolDefinition = {
     name: "mcp_connect",
@@ -96,7 +95,7 @@ async function fixture(
     permissions,
     runtime: () => runtime,
   });
-  runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({
     root,
     provider,
     tools: registry,

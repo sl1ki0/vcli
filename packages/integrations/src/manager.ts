@@ -79,7 +79,7 @@ async function acquire(
     return { root: destination, nameHint: basename(root) };
   }
   const url = source.replace(/^git\+/, "");
-  if (options.revision && !/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/.test(options.revision))
+  if (options.revision && !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(options.revision))
     throw new Error("Invalid Git revision");
   const checkout = `${destination}-checkout`;
   try {

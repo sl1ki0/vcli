@@ -4,6 +4,7 @@ import {
   displayToolText,
   type ChatMessage,
   type RuntimeEvent,
+  type RunPlanState,
   type Session,
 } from "@vcli/core";
 import { toolPageStride } from "./tool-text.ts";
@@ -56,6 +57,7 @@ export function createConversation(
     initial ? sessionMessages(initial) : [],
   );
   const [session, setSession] = createSignal(initial);
+  const [plan, setPlan] = createSignal<RunPlanState | undefined>(initial?.plan);
   const [phase, setPhase] = createSignal("Ready");
   const [selected, setSelected] = createSignal<string>();
   const [expandedReasoning, setExpandedReasoning] = createSignal<Set<string>>(new Set());
@@ -109,6 +111,29 @@ export function createConversation(
     setPhase("Waiting for model…");
   }
   function accept(event: RuntimeEvent) {
+    if (event.type === "plan") {
+      const next = event.data.plan as RunPlanState | undefined;
+      if (next) setPlan(structuredClone(next));
+      const id = event.data.messageId;
+      const content = event.data.text;
+      if (typeof id === "string" && typeof content === "string") {
+        if (messages().some((message) => message.id === id)) replace(id, { text: content });
+        else {
+          setMessages((previous) => [
+            ...previous,
+            {
+              id,
+              role: "assistant",
+              text: content,
+              createdAt: String(event.data.createdAt ?? event.time),
+              status: "complete",
+            },
+          ]);
+          setReveal(id);
+        }
+      }
+      return;
+    }
     if (event.type === "tool-request" || event.type === "tool-start" || event.type === "tool-end") {
       setMessages((previous) => {
         const next = previous.map((message) =>
@@ -172,6 +197,7 @@ export function createConversation(
   function restore(next: Session) {
     artifactGeneration++;
     setSession(next);
+    setPlan(next.plan);
     setMessages(sessionMessages(next));
     pendingUser = undefined;
     assistantId = undefined;
@@ -187,6 +213,7 @@ export function createConversation(
     if (next?.chat) {
       const failed = messages().filter((message) => localFailures.has(message.id));
       setSession(next);
+      setPlan(next.plan);
       const durable = sessionMessages(next);
       const restored = [
         ...durable,
@@ -201,7 +228,10 @@ export function createConversation(
       pendingUser = undefined;
       assistantId = undefined;
     } else {
-      if (next) setSession(next);
+      if (next) {
+        setSession(next);
+        setPlan(next.plan);
+      }
       setMessages((previous) =>
         interruptUnfinishedTools(previous, status).map((message) =>
           message.status === "streaming" ? { ...message, status } : message,
@@ -226,6 +256,7 @@ export function createConversation(
     artifactGeneration++;
     setMessages([]);
     setSession(undefined);
+    setPlan(undefined);
     setSelected(undefined);
     setReveal(undefined);
     setExpandedReasoning(new Set<string>());
@@ -254,7 +285,8 @@ export function createConversation(
     if (!id || !messages().find((message) => message.id === id)?.reasoning) return;
     setExpandedReasoning((previous) => {
       const next = new Set(previous);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -266,7 +298,8 @@ export function createConversation(
     }
     setExpandedTools((previous) => {
       const next = new Set(previous);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -308,6 +341,16 @@ export function createConversation(
     messages,
     visibleMessages,
     session,
+    plan,
+    revealPlan: () => {
+      const id = messages()
+        .filter((message) => message.id.startsWith("plan:"))
+        .at(-1)?.id;
+      if (id) {
+        setSelected(id);
+        setReveal(id);
+      }
+    },
     phase,
     selected,
     expandedReasoning,

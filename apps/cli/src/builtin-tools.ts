@@ -1,4 +1,5 @@
-import { ToolRegistry, type ToolDefinition } from "@vcli/core";
+import type { ToolRegistry } from "@vcli/core";
+import { type ToolDefinition } from "@vcli/core";
 import { createArchitectureTools } from "./tools/architecture.ts";
 import { createDiscoveryTool, createSkillsTool } from "./tools/discovery.ts";
 import { fileTools } from "./tools/files.ts";

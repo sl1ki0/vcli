@@ -246,8 +246,7 @@ describe("invalid tool request limiter", () => {
         yield* f.options.provider.stream(request, abortSignal);
       },
     };
-    let runtime!: AgentRuntime;
-    runtime = new AgentRuntime({
+    const runtime = new AgentRuntime({
       ...f.options,
       provider,
       onEvent: (event) => {

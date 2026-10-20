@@ -2,6 +2,11 @@ node_modules/
 dist/
 .vcli/state/
 .vcli/artifacts/
+**/.vcli/state/
+**/.vcli/artifacts/
+**/.vcli/config.json
+**/__pycache__/
+*.pyc
 *.log
 .env
 .env.*

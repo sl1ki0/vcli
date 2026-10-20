@@ -64,7 +64,6 @@ async function fixture(options: FixtureOptions = {}) {
   const permissions = new PermissionGate(options.permission ?? "yolo", options.approve);
   const architecture = createArchitectureService();
   const events: RuntimeEvent[] = [];
-  let runtime: AgentRuntime;
   const workflows = await createLocalWorkflows({
     root,
     registry,
@@ -74,7 +73,7 @@ async function fixture(options: FixtureOptions = {}) {
     permissions,
     runtime: () => runtime,
   });
-  runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({
     root,
     provider,
     store,

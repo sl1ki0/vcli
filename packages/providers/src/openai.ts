@@ -1,4 +1,5 @@
 import type { ModelEvent, ModelRequest } from "@vcli/core";
+import type OpenAIClient from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses";
 import type { ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions";
 import {
@@ -246,7 +247,7 @@ async function* normalizeChat(
 export function openaiProvider(config: ProviderConfig, dependencies: ProviderDependencies) {
   const compatible = config.provider === "compatible" || config.provider === "openrouter";
   const sdk = (): ProviderTransport => {
-    let client: import("openai").default | undefined;
+    let client: OpenAIClient | undefined;
     return async (request, signal) => {
       if (config.provider === "compatible" && !config.baseURL)
         throw new ProviderError("An OpenAI-compatible provider requires baseURL.");

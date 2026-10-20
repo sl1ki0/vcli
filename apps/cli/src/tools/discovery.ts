@@ -1,4 +1,5 @@
-import { ToolRegistry, type ToolDefinition } from "@vcli/core";
+import type { ToolRegistry } from "@vcli/core";
+import { type ToolDefinition } from "@vcli/core";
 import { objectSchema, stringSchema } from "./schema.ts";
 import type { BuiltinOptions } from "./types.ts";
 

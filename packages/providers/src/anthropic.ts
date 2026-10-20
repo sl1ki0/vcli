@@ -1,4 +1,5 @@
 import type { ModelEvent, ModelRequest } from "@vcli/core";
+import type AnthropicClient from "@anthropic-ai/sdk";
 import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages";
 import {
   abort,
@@ -131,7 +132,7 @@ async function* normalize(
 
 export function anthropicProvider(config: ProviderConfig, dependencies: ProviderDependencies) {
   const sdk = (): ProviderTransport => {
-    let client: import("@anthropic-ai/sdk").default | undefined;
+    let client: AnthropicClient | undefined;
     return async (request, signal) => {
       const key = apiKey(config);
       const { default: Anthropic } = await import("@anthropic-ai/sdk");

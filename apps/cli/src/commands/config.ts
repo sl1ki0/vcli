@@ -6,7 +6,7 @@ export async function configCommand(
   rest: string[],
   context: CommandContext,
 ) {
-  const { root, config, architecture, values } = context;
+  const { root, config, values } = context;
 
   if (!action || action === "show") await print(config);
   else if (action === "set") {

@@ -87,7 +87,8 @@ export function createWorkspaceNavigation(options: NavigationOptions) {
     if (!id) return;
     setCollapsed((previous) => {
       const next = new Set(previous);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }

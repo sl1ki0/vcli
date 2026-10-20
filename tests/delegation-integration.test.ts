@@ -108,7 +108,6 @@ test("local workflow factory isolates explorer capabilities and includes its usa
     await writeFile(join(root, "app.ts"), "export const result = 42;\n");
     const registry = new ToolRegistry();
     const permissions = new PermissionGate("yolo");
-    let runtime: AgentRuntime;
     registerBuiltins(registry, { architecture, store, record: async () => {} });
     registry.register({
       name: "mcp_mutation",
@@ -132,7 +131,7 @@ test("local workflow factory isolates explorer capabilities and includes its usa
       },
     });
     registry.activate(["subagent_explore"]);
-    runtime = new AgentRuntime({
+    const runtime = new AgentRuntime({
       root,
       provider,
       architecture,

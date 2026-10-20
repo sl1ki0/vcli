@@ -1,4 +1,5 @@
 import type { ModelEvent, ModelRequest, ToolCall } from "@vcli/core";
+import type { GoogleGenAI as GoogleGenAIClient } from "@google/genai";
 import type { GenerateContentParameters } from "@google/genai";
 import {
   abort,
@@ -145,7 +146,7 @@ async function* normalize(
 
 export function geminiProvider(config: ProviderConfig, dependencies: ProviderDependencies) {
   const sdk = (): ProviderTransport => {
-    let client: import("@google/genai").GoogleGenAI | undefined;
+    let client: GoogleGenAIClient | undefined;
     return async (request, signal) => {
       const key = apiKey(config);
       const { GoogleGenAI } = await import("@google/genai");

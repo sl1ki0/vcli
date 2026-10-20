@@ -2,7 +2,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { ApprovalDecision } from "@vcli/core";
 import { For } from "solid-js";
 import type { ToolRequest } from "./tool-request.ts";
-import { approvalActions } from "./approval-actions.ts";
+import type { approvalActions } from "./approval-actions.ts";
 
 export function ToolApproval(props: {
   request: ToolRequest;

@@ -5,4 +5,5 @@ dist
 bun.lock
 packages/architecture/resources
 licenses
-.vcli/config.json
+**/.vcli/config.json
+**/__pycache__/**

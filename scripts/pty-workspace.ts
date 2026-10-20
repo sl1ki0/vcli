@@ -81,7 +81,8 @@ export function createWorkspaceTerminal(options: TerminalOptions) {
       const finish = (error?: Error) => {
         clearTimeout(timer);
         listeners.delete(check);
-        error ? reject(error) : resolve();
+        if (error) reject(error);
+        else resolve();
       };
       const check = () => {
         if (problem) finish(failure(problem));
