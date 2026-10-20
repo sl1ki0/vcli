@@ -1,5 +1,12 @@
 # Local coding workflows
 
+The ordinary runtime now also supports structured chat plans, task verification,
+durable run counters, external policy, offline approvals and whole-run journals.
+See [durable runs](runtime.md) for those commands and recovery rules. `/plan show`
+reveals the plan in chat; `/plan visual` opens its dependencies. `/plan approve`
+or `/build` approves a saved draft. The previous `/plans` spelling is a hidden
+compatibility alias. Single-edit checkpoints below remain available separately.
+
 vcli implements these workflows independently. No source from the leaked Claude Code mirror is included. The reference is Claude Code's public documentation for [planning](https://code.claude.com/docs/en/best-practices), [memory](https://code.claude.com/docs/en/memory), [subagents](https://code.claude.com/docs/en/sub-agents), [hooks](https://code.claude.com/docs/en/hooks), and [checkpoints](https://code.claude.com/docs/en/checkpointing). Similar workflows do not imply command, manifest, or feature compatibility with every Claude Code release.
 
 ## Plan, preview, implement

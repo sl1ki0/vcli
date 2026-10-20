@@ -154,18 +154,18 @@ Permission refusals and tool execution failures do not count toward this limit.
 | F3                       | Toggle full architecture and split view       |
 | Ctrl+P                   | Change permissions, including during approval |
 
-| Prompt commands                               | Purpose                                  |
-| --------------------------------------------- | ---------------------------------------- |
-| `/help`, `/commands`                          | Open the command menu                    |
-| `/open`, `/connect`, `/config`, `/status`     | Project, provider and settings           |
-| `/tokens`, `/reasoning`, `/permission`        | Budgets, model effort and permissions    |
-| `/chat`, `/split`, `/architecture`            | Workspace layout                         |
-| `/history`, `/sessions`, `/new`               | Saved and new conversations              |
-| `/observed`, `/intended`, `/changes`, `/scan` | Architecture views and refresh           |
-| `/plan`, `/build`, `/plans`                   | Planning, implementation and saved plans |
-| `/memory`, `/tasks`, `/hooks`                 | Inspect local workflow state             |
-| `/checkpoints`, `/rewind <id>`                | Inspect and restore captured file edits  |
-| `/plugins`, `/skills`                         | Inspect available extensions             |
+| Prompt commands                        | Purpose                                 |
+| -------------------------------------- | --------------------------------------- | ----------------- | ------------------------------ | ---------------------------------------- |
+| `/help`                                | Open the command menu                   |
+| `/open`, `/connect`, `/config`         | Project, provider and settings          |
+| `/tokens`, `/reasoning`, `/permission` | Budgets, model effort and permissions   |
+| `/chat`, `/split`, `/architecture`     | Workspace layout                        |
+| `/history`, `/new`                     | Saved and new conversations             |
+| `/view observed                        | intended                                | changes`, `/scan` | Architecture views and refresh |
+| `/plan [show                           | visual                                  | approve           | reject]`, `/build`             | Chat plan, dependency view and decisions |
+| `/memory`, `/tasks`, `/hooks`          | Inspect local workflow state            |
+| `/checkpoints`, `/rewind <id>`         | Inspect and restore captured file edits |
+| `/plugins`, `/skills`                  | Inspect available extensions            |
 
 Type `/` in the prompt to see commands with descriptions; keep typing to filter.
 Use **↑/↓** to select, **Tab** to complete, and **Esc** to hide suggestions while
@@ -228,11 +228,16 @@ vcli run "Plan the API boundary change" --plan --json
 vcli sessions list
 vcli sessions resume SESSION_ID "Continue and verify the result"
 vcli sessions resume PLAN_SESSION_ID "Implement the plan" --build
+vcli sessions show SESSION_ID
+vcli sessions diff SESSION_ID
+vcli sessions rollback SESSION_ID
 ```
 
 `--json` emits newline-delimited runtime events without terminal escape sequences.
 Interrupted mutation outcomes remain in the ledger and are inspected on resume;
-vcli never automatically replays them. Changing providers discards provider-specific
+vcli never automatically replays them. Use `sessions resolve` to explicitly retry
+a repeatable call, mark it failed, or abort; detected file changes require an
+attribution decision. Changing providers discards provider-specific
 continuation data and retains portable messages and task state.
 
 Balanced defaults are configurable:
@@ -267,6 +272,12 @@ and skill bodies are loaded only after discovery.
 Task budgets reserve the estimated input and response allowance before each model
 call. Reported usage reconciles that reservation; missing usage or an interrupted
 request retains it across resume, so an absent usage report cannot bypass the limit.
+
+The same run also durably limits model requests, tool calls, side-effect actions
+and result bytes, including delegated explorers, hooks and lazy MCP startup.
+Whole batches reserve capacity before effects. Configure `runLimits.*`; resume
+and approval retain counters. See [durable runs](docs/runtime.md) for the external
+policy, offline approvals, crash recovery, task evidence and safe whole-run rollback.
 
 The [reproducible offline benchmark](docs/benchmarks.md) compares identical evidence
 tasks with full-source/full-schema prompts. It measures prepared context and local
@@ -307,13 +318,15 @@ Configuration, import compatibility and storage limitations are documented in
 ## Local coding workflows
 
 Use `/plan` to explore and preview a design without source edits, then `/build`
-to implement it. `/plans`, `/memory`, `/tasks`, `/hooks` and `/checkpoints` inspect
+to approve and implement it. The structured plan appears in chat first;
+`/plan visual` opens its dependency view. `/plan show`, `/memory`, `/tasks`,
+`/hooks` and `/checkpoints` inspect
 local records without model calls. `/rewind <id>` restores a captured native file
 edit only when the file still matches that edit.
 
 The harness loads root project instructions, supports revision-checked persistent
 memory, dependency-aware tasks, before/after command hooks, and up to two isolated
-read-only model explorers sharing the parent's token budget. Native file listing
+read-only model explorers sharing the parent's token and run budgets. Native file listing
 and Git diff tools are available through deferred discovery.
 
 See [local workflows](docs/local-workflows.md) for commands, hook configuration,
@@ -329,6 +342,9 @@ loading covers root `AGENTS.md`, `CLAUDE.md` and `.vcli/MEMORY.md`, with a combi
 Explorers are read-only, limited to two concurrently, six turns each and a default
 12,000-token allocation from the parent's budget. Checkpoints cover native file
 edits, excluding shell, MCP, memory and design effects; they do not rewind chat.
+The whole-run journal additionally covers source changes made through Bash and
+hooks, with original bytes/modes and conflict checks after restart. External
+service effects and private/generated metadata are outside rollback.
 
 ## Repository structure
 
@@ -350,6 +366,7 @@ agent tools. `.vcli/architecture.json` declares the enforced package boundaries.
 
 ```sh
 bun run format:check
+bun run lint
 bun run check
 bun test
 bun run dev architecture check
@@ -378,13 +395,14 @@ imports neither terminal libraries, provider SDKs nor Bun APIs.
 
 ## Documentation
 
-| Guide                                                       | Contents                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------- |
-| [Downloaded build quick start](docs/artifact-quickstart.md) | Onboarding and startup troubleshooting                    |
-| [Architecture](docs/architecture.md)                        | Contracts, package boundaries, graphs and durable state   |
-| [Local workflows](docs/local-workflows.md)                  | Planning, memory, tasks, explorers, hooks and checkpoints |
-| [Integrations](packages/integrations/README.md)             | Skills, plugin manifests and MCP configuration            |
-| [Extension compatibility](docs/extension-compatibility.md)  | Supported formats, catalogs and remaining gaps            |
-| [Validation](docs/validation.md)                            | Automated evidence and real-terminal checks               |
-| [Benchmarks](docs/benchmarks.md)                            | Reproducible offline context estimates                    |
-| [Research](docs/research.md)                                | Public references and independent implementation scope    |
+| Guide                                                       | Contents                                                          |
+| ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| [Downloaded build quick start](docs/artifact-quickstart.md) | Onboarding and startup troubleshooting                            |
+| [Architecture](docs/architecture.md)                        | Contracts, package boundaries, graphs and durable state           |
+| [Local workflows](docs/local-workflows.md)                  | Planning, memory, tasks, explorers, hooks and checkpoints         |
+| [Durable runs](docs/runtime.md)                             | Policy, approvals, budgets, verified plans, recovery and rollback |
+| [Integrations](packages/integrations/README.md)             | Skills, plugin manifests and MCP configuration                    |
+| [Extension compatibility](docs/extension-compatibility.md)  | Supported formats, catalogs and remaining gaps                    |
+| [Validation](docs/validation.md)                            | Automated evidence and real-terminal checks                       |
+| [Benchmarks](docs/benchmarks.md)                            | Reproducible offline context estimates                            |
+| [Research](docs/research.md)                                | Public references and independent implementation scope            |

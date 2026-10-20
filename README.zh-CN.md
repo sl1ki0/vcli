@@ -1,5 +1,11 @@
 # vcli
 
+主运行时现已支持持久化预算、审批、可验证任务以及重启后的变更日志和安全回滚。
+YOLO 仍为默认模式，可选外部 policy 提供严格限制。计划优先显示在聊天中；
+`/plan visual` 打开依赖图，`/plan approve` 和 `/plan reject` 无需调用模型。
+命令目录统一为 `/plan`、`/view`、`/history`、`/permission` 和 `/help`，旧别名仍兼容。
+使用方法和可复现示例见[运行时指南](docs/runtime.md)。
+
 [English](README.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md)
 
 英文 README 是主文档；其他辅助文档目前仍为英文。俄文和简体中文 README 翻译本指南；命令名称、配置键和 UI 标签保持不变。

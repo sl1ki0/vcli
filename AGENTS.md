@@ -1,107 +1,98 @@
 # vcli contributor instructions
 
-## Product and collaboration
+## Product and boundaries
 
-- Architecture-first TypeScript CLI with observed/intended/change views and usable
-  full-screen chat: visible sent messages, Markdown, history and settings.
-- Keep code clean and modular, with named services/controllers per responsibility.
-- Target macOS/Linux/WSL. YOLO default; also ask/read-only. Prioritize token savings.
-- Parallel development authorized; separate ownership. Small verified commits and
-  pushes to origin/codex/architecture-first-cli; existing identity, no AI trailers.
-- Preserve user changes. `.vcli/config.json` is untracked personal configuration:
-  never inspect it for secrets, overwrite, format, stage or commit it. Never commit
-  credentials, `.env`, sessions, artifacts or generated binaries.
-- Implement public workflows independently from official docs/licensed sources.
-  Do not copy the leaked tanbiralam/claude-code mirror or claim full feature parity.
-
-## Stack and boundaries
-
-- Bun 1.3.13, strict TypeScript 5.9.3, OpenTUI/Solid, SQLite, Compiler API, ELK,
-  resvg. Pin dependencies; preserve bun.lock and license notices.
-- `packages/core`: portable contracts, runtime, context, budgets and permissions.
-  No terminal, provider SDK, Bun-specific, filesystem or subprocess imports.
-- `packages/architecture`: analysis, design/drift, layout, SVG/PNG; no inference.
-- `packages/providers`: OpenAI/Anthropic/Gemini/OpenRouter/compatible SDK adapters.
-- `packages/integrations`: portable skills/plugins/catalogs and lazy MCP clients.
-- `packages/tui`: presentation/controllers, navigation and chat; no agent tools.
-- `apps/cli`: composition, commands, tools, configuration and SQLite drivers.
-  `src/workflows/` owns disk/process implementations of local harness features.
-- Contracts in core; enforce .vcli/architecture.json dependency boundaries.
+- Architecture-first CLI: separate observed/intended/change graphs; full-screen
+  chat, Markdown, sent messages, history/settings. YOLO default, also ask/read-only.
+  Target macOS/Linux/WSL. Prioritize token savings and modular services/controllers.
+- Parallel ownership authorized. Small verified commits/pushes to origin/main;
+  existing identity, no AI trailers. Preserve user edits. Never inspect, overwrite,
+  format, stage or commit personal `.vcli/config.json`, credentials, `.env`,
+  sessions, artifacts or binaries.
+- Use official/licensed sources; never copy leaked tanbiralam/claude-code code or
+  claim vendor parity. Pin Bun 1.3.13, strict TS 5.9.3 and deps; preserve lock/licenses.
+- Enforce .vcli/architecture.json: core = portable contracts/runtime/context/
+  budgets/permissions (no terminal/SDK/Bun/filesystem/subprocess); architecture =
+  analysis/design/drift/layout/SVG/PNG, no inference; providers = SDK adapters;
+  integrations = skills/plugins/catalogs/lazy MCP; tui = presentation/controllers,
+  no agent tools; apps/cli = composition/tools/config/SQLite, with disk/process
+  implementations in src/workflows/.
 
 ## Runtime invariants
 
-- Authorize/validate before execution wrappers. Persist starts before effects,
-  results before next mutation. Parallel reads; serialize writes/shell/hooks.
-- Reject invalid tool arguments before approval/start events; never coerce types.
-- /permission (/permissions, Ctrl+P) updates active gates after saving; YOLO releases
-  pending approval, read-only denies it; running actions finish. Plan still wins.
-- Ask-mode menus use arrows/Enter; remembered approvals persist before effects,
-  scoped to conversation/project/tool contract. Plan/read-only always take precedence.
-- Stop after three repeated schema errors per tool; persist the guard across empty
-  resumes, reset on new human input. Corrected arguments clear that tool's count.
-- Never blindly replay uncertain mutations. Resume must inspect current state.
-  Post-hook/checkpoint bookkeeping failures must not disguise successful edits.
-  Cancellation drains concurrent children before closing storage.
-- Separate bounded model text, retrievable full artifacts and UI details.
-  Discover deferred schemas through tools_search.
-- Balanced: prompt32k/map4k/schemas4k/result3k/output8k. Reserve output within the
-  model window (unknown:32,768). Count instructions. Graph operations are local.
-- Reserve task tokens durably before inference/delegation; count actual usage and
-  retain conservative charges when usage/outcomes are missing. Settlement is
-  idempotent. Explorers share the parent budget; they do not get free extra tokens.
-- Preserve the task ledger; prune complete tool groups, never human chat history.
-- Session.chat is presentation history; Session.messages is provider context.
-  Persist tool cards/results together; bounded previews and local artifact views
-  never enter model context. Restore unfinished tools as interrupted, never replay.
-  Preserve opaque signatures/continuations; clear them on provider switches.
-  SQLite snapshots/event watermarks prevent duplicate stream replay.
-- Scope credentials to provider/endpoint, separate from project settings. Mask and
-  redact keys. OpenRouter never borrows OpenAI keys. Users select models explicitly.
+- One AgentRuntime, run IDs = session IDs, no homework loop. Validate/authorize
+  before wrappers; persist starts before effects, results before next mutation.
+  Parallel reads; serialize writes/shell/hooks/plan metadata.
+- Reject schemas before approval/start, no coercion. Stop after three repeated
+  schema errors/tool, persist across empty resumes; new human input resets guard,
+  corrected args clear that tool's count. Discover schemas with tools_search.
+- Never replay uncertain effects. Inspect then explicit retry/fail/abort plus file
+  attribution; retry only repeatable tools. Duplicate IDs cannot mutate twice;
+  changed tool/args are protocol errors. Bookkeeping cannot disguise successful
+  edits. Cancellation drains concurrent children before storage closes.
+- Atomically reserve whole batches against model/tool/effect/result-byte counters
+  before calls. Preserve through planning/approval/resume/retry. Bound unknown
+  output; retain conservative charges for missing outcomes. Reserve task tokens
+  before inference/delegation; reconcile actual usage, settle idempotently.
+  Explorers share parent tokens AND resource counters.
+- Ask: arrows/Enter, durable session/project/contract grants. Revalidate on resume.
+  /permission (Ctrl+P) saves then updates gates; YOLO releases pending approvals,
+  read-only denies, running actions finish. Plan/read-only win. Strict deletion asks.
+- Optional external policy: deny-first exact simple Bash, canonical paths/cwd inside
+  project, reject traversal/links; inherit in explorers/hooks/lazy startup. Reads
+  with hooks/startup are charged and approved as compound effects.
+- Separate model text/artifacts/UI. Balanced: prompt32k/map4k/schemas4k/result3k/
+  output8k. Count instructions/output reserve within window (unknown 32,768).
+- Preserve task ledger and human chat; prune complete tool groups. Session.chat =
+  presentation; Session.messages = provider context. Persist cards/results together;
+  UI previews/full recovery diffs stay out of model context. Restore unfinished
+  tools interrupted, never replay. Preserve opaque continuations; clear on provider
+  switch. SQLite snapshots/event watermarks prevent duplicate stream replay.
+- Provider/endpoint credentials separate from project settings; mask keys.
+  OpenRouter never borrows OpenAI keys. Users explicitly select models.
 
 ## Workflows and terminal
 
-- Durable plan policy denies edits/shell/hooks/MCP startup; resume retains it.
-  /build or --build enables implementation under configured permissions.
-- architecture_preview is a draft retained across scans; architecture_propose
-  persists intended design before structural edits.
-- Reload root AGENTS.md/CLAUDE.md/.vcli/MEMORY.md each run within combined 2k
-  tokens. Keep this file concise. Memory writes require memory_read's revision.
-- Tasks persist with dependency/cycle validation. Explorers are isolated read-only
-  runtimes: max two, depth one, no shell/MCP/hooks/nested delegation; default 12k
-  allocation, range 4k–24k, max six turns. Full transcripts remain artifacts.
-- Checkpoints preserve native patches' bytes/modes. Restore newest first, refuse
-  external/uncertain edits. Shell/MCP/memory/design effects are excluded.
-- .vcli/hooks.json: beforeTool/afterTool, gated commands, bounded output,
-  timeout/process-group cancellation.
-- Preserve TUI boot order: static OpenTUI core import, then dynamic Solid preload,
-  then dynamic Solid/workspace imports. Compiled startup outside checkout needs it.
-- Graph -> LayoutScene -> SVG -> PNG -> OpenTUI image. Shared render/hit geometry,
-  independent repaint, tree fallback. Keep observed/intended/change graphs separate.
-- Ctrl+C uses physical-key metadata across layouts; /stop and Stop also cancel
-  active tasks, preserving partial history and keeping chat reusable. /exit and
-  /quit cancel and drain active work before closing the terminal.
-- F2 /chat, /split, F3 architecture; expose /history /new /connect /tokens
-  /reasoning and workflow commands. Navigation/settings/history make no model calls.
-- Prompt slash suggestions share /help's catalog; arrows select, Tab completes,
-  Enter completes partial commands or submits exact ones; Esc preserves the draft.
+- Plan Mode requires structured plan_publish, denies edits/shell/hooks/MCP, persists
+  on resume. /plan approve or /build approves a draft under configured permissions.
+  Chat first; /plan visual opens dependencies. Tasks validate dependency graphs and
+  successful recorded verification-tool evidence. Archive completed plans on new
+  human input; empty resumes skip completed work.
+- architecture_preview stays draft across scans; architecture_propose persists
+  intended design before structural edits. Draft restart restoration remains open.
+- Reload root AGENTS.md/CLAUDE.md/.vcli/MEMORY.md each run within combined 2k tokens.
+  Keep this file concise. Memory writes require memory_read's revision.
+- Explorers: isolated read-only, max two, depth one, no shell/MCP/hooks/nesting;
+  default 12k, range 4k–24k, max 6 turns; transcripts are artifacts.
+- Checkpoints preserve native patch bytes/modes; restore newest first, refuse
+  external/uncertain edits. Exclude shell/MCP/memory/design and chat rewind.
+- Whole-run journals cover allowed creates/edits/deletes, including shell/hooks.
+  Guard trees before mutations; validate ALL touched hashes/paths before rollback.
+  Resolve uncertainty first. Explicit private/generated/policy-denied exclusions
+  and snapshot limits: docs/runtime.md.
+- .vcli/hooks.json: beforeTool/afterTool, gated commands, bounded output, timeout/
+  process-group cancellation. Post-hook failures preserve actual tool outcomes.
+- Startup order: static OpenTUI core, dynamic Solid preload, then dynamic Solid/
+  workspace imports; compiled clients outside checkout require it.
+- Graph -> LayoutScene -> SVG -> PNG -> OpenTUI image; shared render/hit geometry,
+  independent repaint, tree fallback, separate graph views.
+- Physical Ctrl+C and /stop cancel; /exit drains. F2 /chat, /split, F3 architecture.
+  Local navigation/settings/history/plans make no model calls. One /help/suggestion
+  catalog: arrows select, Tab completes, Enter completes partial/submits exact,
+  Esc preserves draft; hide compatibility aliases.
 
 ## Verification and handoff
 
-- Use rg; test meaningful behavior.
-- `bun install --frozen-lockfile`; `bun run format:check`; `bun run check`;
-  `bun test`; `bun run dev architecture check`; `bun run build`; `bun run smoke`.
-- TUI/build: source+compiled PTY outside checkout; cleanup, worker/font, FD256.
-- `bun run benchmark --write docs/benchmarks.md`: offline estimates, not measured
-  paid-model savings/completion rates. Fixtures use no paid APIs.
-- Baseline on 2026-10-13: 204 tests / 1,062 assertions; macOS and Linux CI passed:
-  https://github.com/sl1ki0/vcli/actions/runs/38405240570
-  Artifacts: vcli-macOS-ARM64, vcli-Linux-X64. Reverify changes.
-- Local extension compatibility validation: 289 tests / 1,679 assertions on macOS.
-  Format/catalog adapters, preinstall inspection, isolated broken plugins; vendor
-  commands/agents/hooks, npm/archive/HTTP catalogs and OAuth remain unsupported.
-- Open gaps: background/write/custom agents, nested memory/imports, more/vendor
-  hooks, conversation rewind, draft preview restart restoration. Hosted/IDE/login,
-  browser parity, native Windows and deeper languages deferred. Manual terminal
-  matrix/live provider benchmarks incomplete.
-- Details: README.md and docs/{architecture,local-workflows,artifact-quickstart,
-  validation,research,benchmarks}.md. Update this handoff when invariants change.
+- Use rg and meaningful tests. bun install --frozen-lockfile; bun run format:check;
+  bun run lint; bun run check; bun test; bun run dev architecture check; bun run
+  build; bun run smoke. Source+compiled PTY outside checkout: cleanup, worker/font,
+  graphics, FD256. Local 2026-10-20: 356 tests / 2,062 assertions; reverify changes.
+- bun run benchmark --write docs/benchmarks.md: offline estimates, no paid-model
+  savings/completion claims. Fixtures use no paid APIs. tests/run-acceptance.test.ts:
+  ordinary harness, unchanged Python tests, Bash, three verified dependent tasks,
+  restart/diff/rollback. Example: fixtures/order/; guide: docs/runtime.md.
+- Gaps: background/write/custom agents, nested memory, vendor hooks, chat rewind,
+  hosted/IDE/login/browser parity, Windows, deeper languages, live benchmarks.
+- Details: README.md; docs/{runtime,architecture,local-workflows,validation,
+  artifact-quickstart,research,benchmarks,extension-compatibility}.md. Update handoff
+  when invariants change.

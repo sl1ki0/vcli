@@ -1,11 +1,11 @@
 # Validation record
 
 This release is validated locally on macOS arm64 with Bun 1.3.13. Run
-`bun run check`, `bun test`, `bun run build`, `bun run smoke` and
+`bun run format:check`, `bun run lint`, `bun run check`, `bun test`, `bun run build`, `bun run smoke` and
 `bun run benchmark` to reproduce the checks.
 
-The local suite passes 289 tests with 1,679 assertions, including chat, first-run setup,
-local workflows and extension compatibility.
+On 2026-10-20 the local suite passes 356 tests with 2,062 assertions, including
+durable ordinary runs, chat, first-run setup, local workflows and extensions.
 Formatting, strict type checking, declared package dependencies, native packaging,
 standalone terminal smoke and the offline benchmark also pass. The setup coverage
 below was added after the initial build's missing onboarding was reported.
@@ -25,6 +25,30 @@ The [local workflow CI run](https://github.com/sl1ki0/vcli/actions/runs/38405240
 passed on macOS and Linux with all 204 tests, native builds, the existing terminal
 smoke checks, and the new packaged plan/resume/build/task/checkpoint workflow.
 Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfully.
+
+## Ordinary runtime and command revision, 2026-10-20
+
+`tests/run-acceptance.test.ts` exercises the production harness, compatible SDK
+and actual Bash using the intentionally broken order fixture. It publishes three
+dependent tasks, proves planning has no source effects, approves the plan, records
+verification evidence, preserves the test file, reopens SQLite without repeating
+completed tasks, inspects the diff and restores original bytes.
+
+New core and integration tests cover every durable counter, all-or-none batch
+reservation, output caps, duplicate call identities, schema-bound approvals,
+injected crashes after effects, explicit attribution, safe retry restrictions,
+conflict refusal and repeated rollback. Explorers share token and resource
+reservations and inherit path policy. Read tools with hooks and lazy MCP startup
+are charged and approved before effects, including headless restart decisions.
+Plan Mode can discover local schemas with configured MCP without starting servers.
+
+Source and compiled PTY checks also cover a chat-first structured plan, dependency
+view, restored plan after restart and approval without additional inference.
+Canonical slash commands consolidate plan actions and architecture views; legacy
+aliases remain usable without cluttering the catalog. ESLint, Prettier, strict
+TypeScript, architecture boundaries, build, standalone smoke and the refreshed
+offline context benchmark pass locally. Live provider completion rates remain
+unmeasured.
 
 ## Extension compatibility, 2026-10-13
 
