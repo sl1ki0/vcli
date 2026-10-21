@@ -7,6 +7,7 @@ import { balanced, type PermissionMode, type RuntimeEvent, type ToolCall } from 
 import type { Config } from "../apps/cli/src/config.ts";
 import { createHarness } from "../apps/cli/src/harness.ts";
 import { decideTool, journalForRun, withRun } from "../apps/cli/src/workflows/run-controls.ts";
+import { response, type RpcRequest } from "../packages/integrations/test/fixture-server.ts";
 
 const HOOK_COMMAND = "printf hook-executed >> marker.txt";
 const READ: ToolCall = { id: "read-source", name: "files_read", arguments: { path: "app.ts" } };
@@ -259,6 +260,125 @@ test("a zero effect budget blocks deferred MCP startup before the endpoint is co
   } finally {
     await harness?.close();
     endpoint.stop(true);
+    await fixture.close();
+  }
+});
+
+test("MCP startup reserves every configured server before starting any connection", async () => {
+  const fixture = await effectFixture(
+    { id: "discover-batch", name: "tools_search", arguments: { query: "external" } },
+    1,
+    "yolo",
+    false,
+  );
+  let contacts = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      contacts++;
+      return new Response("Unexpected connection", { status: 500 });
+    },
+  });
+  fixture.config.mcpServers = ["first", "second"].map((name) => ({
+    name,
+    type: "http" as const,
+    url: server.url.href,
+  }));
+  let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+  try {
+    harness = await createHarness(
+      fixture.root,
+      fixture.config,
+      createArchitectureService(),
+      undefined,
+      undefined,
+      fixture.options,
+    );
+    const session = await harness.run("Discover tools", new AbortController().signal);
+    expect(session.status).toBe("budget");
+    expect(session.runState?.counters.sideEffects).toBe(0);
+    expect(contacts).toBe(0);
+  } finally {
+    await harness?.close();
+    server.stop(true);
+    await fixture.close();
+  }
+});
+
+test("MCP discovery skips malformed schemas and isolates duplicate schema IDs without poisoning later discovery", async () => {
+  const search: ToolCall = {
+    id: "discover-schemas",
+    name: "tools_search",
+    arguments: { query: "external" },
+  };
+  const fixture = await effectFixture(search, 5, "yolo", false, {
+    ...search,
+    id: "discover-again",
+  });
+  let discoveries = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const rpc = (await request.json()) as RpcRequest;
+      if (rpc.method === "tools/list") {
+        discoveries++;
+        return Response.json({
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result: {
+            tools: [
+              {
+                name: "bad",
+                description: "external bad",
+                inputSchema: {
+                  type: "object",
+                  properties: { value: { type: "invalid-fixture-type" } },
+                },
+              },
+              ...["first", "second"].map((name) => ({
+                name,
+                description: `external ${name}`,
+                inputSchema: { $id: "https://fixture.invalid/reused", type: "object" },
+              })),
+            ],
+          },
+        });
+      }
+      const result = response(rpc);
+      return result ? Response.json(result) : new Response(null, { status: 202 });
+    },
+  });
+  fixture.config.mcpServers = [{ name: "external", type: "http", url: server.url.href }];
+  let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+  try {
+    harness = await createHarness(
+      fixture.root,
+      fixture.config,
+      createArchitectureService(),
+      undefined,
+      undefined,
+      fixture.options,
+    );
+    const session = await harness.run("Discover external tools", new AbortController().signal);
+    expect(session.status).toBe("complete");
+    expect(discoveries).toBe(1);
+    const matches = harness.registry.search("external", 100);
+    expect(matches.some((tool) => tool.description.endsWith("external first"))).toBe(true);
+    expect(matches.some((tool) => tool.description.endsWith("external second"))).toBe(true);
+    expect(matches.some((tool) => tool.description.endsWith("external bad"))).toBe(false);
+    expect(harness.diagnostics.join("\n")).toContain("invalid tool schema");
+    expect(session.runState?.counters.sideEffects).toBe(1);
+    expect(
+      session.chat?.filter(
+        (message) => message.role === "tool" && message.tool?.state === "failed",
+      ),
+    ).toHaveLength(0);
+  } finally {
+    await harness?.close();
+    server.stop(true);
     await fixture.close();
   }
 });

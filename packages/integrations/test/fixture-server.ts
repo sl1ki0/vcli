@@ -68,6 +68,8 @@ export function response(request: RpcRequest): Record<string, unknown> | undefin
 }
 
 if (import.meta.main) {
+  if (process.env.START_COUNT_FILE)
+    writeFileSync(process.env.START_COUNT_FILE, "started\n", { flag: "a", mode: 0o600 });
   createInterface({ input: process.stdin }).on("line", (line) => {
     const result = response(JSON.parse(line) as RpcRequest);
     if (result) process.stdout.write(JSON.stringify(result) + "\n");

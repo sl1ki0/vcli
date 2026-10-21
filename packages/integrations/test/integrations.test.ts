@@ -60,6 +60,45 @@ afterEach(async () => {
 });
 
 describe("plugin import adapters", () => {
+  test("skill names cannot bypass discovery with external paths and oversized bodies are rejected", async () => {
+    const root = await temp();
+    await portable(root);
+    const outside = await temp();
+    await put(
+      outside,
+      "SKILL.md",
+      "---\nname: outside\ndescription: Private outside fixture.\n---\nPRIVATE_SKILL_FIXTURE",
+    );
+    const plugin = await loadPlugin(root);
+    await expect(loadSkill(join(outside, "SKILL.md"), plugin.skills)).rejects.toThrow(
+      "Unknown skill",
+    );
+    await put(
+      root,
+      "skills/inspect/SKILL.md",
+      "---\nname: inspect\ndescription: Inspect architecture.\n---\n" + "x".repeat(1024 * 1024),
+    );
+    await expect(loadSkill("sample:inspect", plugin.skills)).rejects.toThrow(
+      "exceeds 1048576 bytes",
+    );
+  });
+
+  test("package metadata refuses FIFOs and oversized JSON instead of blocking or buffering it", async () => {
+    const fifoRoot = await temp();
+    await run("mkfifo", [join(fifoRoot, "plugin.json")]);
+    await expect(loadPlugin(fifoRoot)).rejects.toThrow("regular file");
+    const skillRoot = await temp();
+    await run("mkfifo", [join(skillRoot, "SKILL.md")]);
+    await expect(loadPlugin(skillRoot)).rejects.toThrow("regular file");
+    const largeRoot = await temp();
+    await put(largeRoot, "plugin.json", " ".repeat(1024 * 1024 + 1));
+    await expect(loadPlugin(largeRoot)).rejects.toThrow("exceeds 1048576 bytes");
+    const invalidRoot = await temp();
+    await put(invalidRoot, "plugin.json", '{"secret": "private-invalid-json-fixture');
+    await expect(loadPlugin(invalidRoot)).rejects.toThrow("Invalid package JSON object");
+    await expect(loadPlugin(invalidRoot)).rejects.not.toThrow("private-invalid-json-fixture");
+  });
+
   test("portable discovery returns metadata and loads instructions on demand", async () => {
     const root = await temp();
     await portable(root);
@@ -359,6 +398,131 @@ describe("snapshot installation and catalogs", () => {
 });
 
 describe("lazy MCP clients", () => {
+  test("stdio discovery starts the configured executable exactly once", async () => {
+    const root = await temp();
+    const counter = join(root, "startup-count.txt");
+    const manager = new McpManager([
+      {
+        name: "once",
+        type: "stdio",
+        command: process.execPath,
+        args: [join(import.meta.dir, "fixture-server.ts")],
+        env: { START_COUNT_FILE: counter },
+      },
+    ]);
+    try {
+      expect(await manager.discover()).toHaveLength(4);
+      expect((await readFile(counter, "utf8")).trim().split("\n")).toEqual(["started"]);
+    } finally {
+      await manager.disconnect();
+    }
+  });
+
+  for (const format of ["json", "sse"] as const) {
+    test(`SDK rejects oversized chunked HTTP ${format} before parsing a complete body`, async () => {
+      let rejectedBody = false;
+      const diagnostics: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(request) {
+          if (request.method !== "POST") return new Response(null, { status: 405 });
+          const rpc = (await request.json()) as RpcRequest;
+          if (rpc.method === "tools/list") {
+            rejectedBody = true;
+            const value = JSON.stringify({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                tools: [
+                  { name: "huge", description: "x".repeat(8192), inputSchema: { type: "object" } },
+                ],
+              },
+            });
+            const payload = new TextEncoder().encode(
+              format === "sse" ? `data: ${value}\n\n` : value,
+            );
+            let offset = 0;
+            return new Response(
+              new ReadableStream({
+                pull(controller) {
+                  if (offset >= payload.length) return controller.close();
+                  controller.enqueue(payload.subarray(offset, offset + 512));
+                  offset += 512;
+                },
+              }),
+              {
+                headers: {
+                  "content-type": format === "sse" ? "text/event-stream" : "application/json",
+                },
+              },
+            );
+          }
+          const result = response(rpc);
+          return result ? Response.json(result) : new Response(null, { status: 202 });
+        },
+      });
+      const manager = new McpManager([{ name: "limited", type: "http", url: server.url.href }], {
+        maxResponseBytes: 2048,
+        timeoutMs: 1000,
+        onDiagnostic: (text) => diagnostics.push(text),
+      });
+      try {
+        expect(await manager.discover()).toEqual([]);
+        expect(rejectedBody).toBe(true);
+        expect([...manager.diagnostics, ...diagnostics].join("\n")).toContain(
+          "exceeded 2048 bytes",
+        );
+      } finally {
+        await manager.disconnect();
+        server.stop(true);
+      }
+    });
+  }
+
+  test("discovery bounds the aggregate across individually small HTTP pages", async () => {
+    let pages = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(request) {
+        if (request.method !== "POST") return new Response(null, { status: 405 });
+        const rpc = (await request.json()) as RpcRequest;
+        if (rpc.method === "tools/list") {
+          pages++;
+          return Response.json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              tools: [
+                {
+                  name: `tool${pages}`,
+                  description: "x".repeat(700),
+                  inputSchema: { type: "object" },
+                },
+              ],
+              nextCursor: `page${pages + 1}`,
+            },
+          });
+        }
+        const result = response(rpc);
+        return result ? Response.json(result) : new Response(null, { status: 202 });
+      },
+    });
+    const manager = new McpManager([{ name: "limited", type: "http", url: server.url.href }], {
+      maxResponseBytes: 2048,
+      timeoutMs: 1000,
+    });
+    try {
+      expect(await manager.discover()).toEqual([]);
+      expect(pages).toBe(3);
+      expect(manager.diagnostics.join("\n")).toContain("exceeded 2048 bytes");
+    } finally {
+      await manager.disconnect();
+      server.stop(true);
+    }
+  });
+
   test("SDK stdio connection negotiates legacy protocol, paginates tools, and reads resources", async () => {
     const manager = new McpManager([
       {

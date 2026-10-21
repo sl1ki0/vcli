@@ -1,4 +1,5 @@
-import { access, realpath, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export function validateName(name: unknown, label = "Name"): string {
@@ -55,8 +56,40 @@ export function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Bound untrusted metadata before parsing and refuse FIFOs/devices without blocking. */
+export async function readPackageText(
+  path: string,
+  limit = 1024 * 1024,
+  prefixOnly = false,
+): Promise<string> {
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await file.stat();
+    if (!info.isFile()) throw new Error(`Package content must be a regular file: ${path}`);
+    if (!prefixOnly && info.size > limit)
+      throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
+    const buffer = Buffer.alloc(limit + (prefixOnly ? 0 : 1));
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await file.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > limit) throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
+    return buffer.subarray(0, total).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
+
 export async function readJson(path: string): Promise<Record<string, unknown>> {
-  return object(JSON.parse(await readFile(path, "utf8")), path);
+  const text = await readPackageText(path);
+  try {
+    return object(JSON.parse(text), path);
+  } catch {
+    // Parser errors may quote credentials embedded in invalid metadata.
+    throw new Error(`Invalid package JSON object: ${path}`);
+  }
 }
 
 export function message(error: unknown): string {
