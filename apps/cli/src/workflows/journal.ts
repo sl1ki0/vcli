@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ToolCall, ToolContext } from "@vcli/core";
 import { restoreFiles } from "./journal-restoration.ts";
 import { JournalStore } from "./journal-store.ts";
@@ -12,6 +10,7 @@ import {
   type JournalTree,
 } from "./journal-snapshot.ts";
 import { ProjectPolicy } from "./policy.ts";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
 
 interface Change {
   before?: JournalFile;
@@ -96,7 +95,8 @@ export class RunJournal {
     private readonly root: string,
     options: { stateDirectory?: string; policy?: ProjectPolicy } = {},
   ) {
-    this.root = realpathSync(resolve(root));
+    using filesystem = new RootedFileSystem(root, { allowProtectedPaths: true });
+    this.root = filesystem.root;
     this.store = new JournalStore(this.root, options.stateDirectory);
     this.policy = options.policy ? Promise.resolve(options.policy) : ProjectPolicy.load(this.root);
   }

@@ -1,7 +1,8 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ToolCall, ToolContext } from "@vcli/core";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
+import { privateProjectPath } from "./private-path.ts";
 
 interface Rules {
   allow: string[];
@@ -41,8 +42,7 @@ export async function projectPath(
   if (!pathInside(root, path) || (!options.allowRoot && path === root))
     throw new Error("Path must remain inside the project workspace.");
   const protectedPath = (candidate: string): boolean => {
-    const first = relative(root, candidate).split(sep)[0]?.toLowerCase();
-    return first === ".vcli" || first === ".git";
+    return privateProjectPath(relative(root, candidate));
   };
   if (protectedPath(path))
     throw new Error("Agent tools cannot access protected project configuration or state.");
@@ -203,19 +203,15 @@ export class ProjectPolicy {
       throw new Error("Policy must be outside the mutable workspace.");
     if (canonical !== path)
       throw new Error("Policy path must be canonical without symbolic links.");
-    const handle = await open(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    const filesystem = new RootedFileSystem("/", {
+      canonicalRoot: true,
+      allowProtectedPaths: true,
+    });
     let raw: unknown;
     try {
-      if (!(await handle.stat()).isFile()) throw new Error("Policy must be a regular file.");
-      const buffer = Buffer.alloc(65_537);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      if (bytesRead > 65_536) throw new Error("Policy exceeds 64 KiB.");
-      raw = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
+      raw = JSON.parse(filesystem.readText(path, 65_536));
     } finally {
-      await handle.close();
+      filesystem.close();
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw))
       throw new Error("Invalid policy document.");

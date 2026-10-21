@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyToolConversationEvent, startMessage, type RuntimeEvent } from "@vcli/core";
@@ -355,7 +355,7 @@ describe("durable tool conversation history", () => {
         expect(await store.pendingMutations(id)).toEqual(["shell_run"]);
         // Reopening history reads only the journal and cannot execute pending tools.
         await store.save(restored);
-        const db = new Database(join(root, ".vcli/state/sessions.sqlite"));
+        const db = Database.deserialize(await readFile(join(root, ".vcli/state/sessions.sqlite")));
         const count = db.query<{ count: number }, []>("SELECT count(*) AS count FROM events").get()!
           .count;
         store.close();

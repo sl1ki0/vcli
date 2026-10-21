@@ -1,74 +1,52 @@
-import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { chmod, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
 import { sameFile, type JournalFile } from "./journal-snapshot.ts";
 import type { ProjectPolicy } from "./policy.ts";
-import { readFileBytes } from "./file-data.ts";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
 
 export interface RestorationEntry {
   destination: string;
   before?: JournalFile;
   after?: JournalFile;
 }
-async function currentFile(path: string): Promise<JournalFile | undefined> {
-  try {
-    const handle = await open(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink > 1)
-        throw new Error("Rollback refuses nonregular or hard-linked files.");
-      const content = await readFileBytes(handle, 128 * 1024 * 1024);
-      return {
-        digest: createHash("sha256").update(content).digest("hex"),
-        bytes: "",
-        mode: stat.mode & 0o7777,
-      };
-    } finally {
-      await handle.close();
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return undefined;
-  }
-}
-
-/** Stage every replacement, validate every hash, then commit. Conflicts never touch user files. */
+/** Prepare every byte and validate every path/hash before starting durable rollback. */
 export async function restoreFiles(
   entries: RestorationEntry[],
   policy: ProjectPolicy,
   persistStart: () => Promise<void>,
 ): Promise<void> {
-  const staged = new Map<string, string>();
-  try {
-    for (const entry of entries) {
-      if (!entry.before) continue;
-      await mkdir(dirname(entry.destination), { recursive: true });
-      const temporary = join(dirname(entry.destination), `.vcli-restore-${randomUUID()}`);
-      await writeFile(temporary, Buffer.from(entry.before.bytes, "base64"), {
-        flag: "wx",
-        mode: entry.before.mode,
+  using filesystem = new RootedFileSystem(policy.root, { canonicalRoot: true });
+  const staged = new Map<string, Buffer>();
+  for (const entry of entries) {
+    if (!entry.before && !entry.after) throw new Error("Invalid empty rollback entry.");
+    if (entry.before) {
+      if (
+        !Number.isInteger(entry.before.mode) ||
+        entry.before.mode < 0 ||
+        entry.before.mode > 0o7777
+      )
+        throw new Error("Rollback snapshot mode is corrupt; no files were changed.");
+      const bytes = Buffer.from(entry.before.bytes, "base64");
+      if (createHash("sha256").update(bytes).digest("hex") !== entry.before.digest)
+        throw new Error("Rollback snapshot is corrupt; no files were changed.");
+      staged.set(entry.destination, bytes);
+    }
+    await policy.resolvePath(entry.destination, { write: true });
+    const current = filesystem.snapshot(entry.destination, 128 * 1024 * 1024);
+    if (
+      !sameFile(current && { digest: current.digest, mode: current.mode, bytes: "" }, entry.after)
+    )
+      throw new Error("Rollback conflict; no files were changed.");
+  }
+  await persistStart();
+  for (const entry of entries) {
+    const content = staged.get(entry.destination);
+    if (content) {
+      filesystem.writeAtomic(entry.destination, content, {
+        expected: entry.after ?? null,
+        mode: entry.before!.mode,
       });
-      await chmod(temporary, entry.before.mode);
-      staged.set(entry.destination, temporary);
+    } else {
+      filesystem.delete(entry.destination, { expected: entry.after });
     }
-    for (const entry of entries) {
-      await policy.resolvePath(entry.destination, { write: true });
-      if (!sameFile(await currentFile(entry.destination), entry.after))
-        throw new Error("Rollback conflict; no files were changed.");
-    }
-    await persistStart();
-    for (const entry of entries) {
-      const temporary = staged.get(entry.destination);
-      if (temporary) {
-        await rename(temporary, entry.destination);
-        staged.delete(entry.destination);
-      } else await unlink(entry.destination);
-    }
-  } finally {
-    for (const temporary of staged.values()) await unlink(temporary).catch(() => {});
   }
 }

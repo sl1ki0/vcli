@@ -12,7 +12,10 @@ export async function sessionsCommand(
   const { root } = context;
   if (await sessionControl(action, rest, context)) return;
   if (action === "list") {
-    const store = await SqliteSessionStore.open(root, storeOptions(context.values));
+    const store = await SqliteSessionStore.open(root, {
+      ...storeOptions(context.values),
+      readOnlySnapshot: true,
+    });
     try {
       await print(
         (await store.list(root)).map(({ id, status, ledger, usage, updatedAt }) => ({

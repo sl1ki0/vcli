@@ -90,6 +90,7 @@ export async function interactive(
       },
       inspect: async (topic) => {
         const store = await SqliteSessionStore.open(current.root, {
+          readOnlySnapshot: true,
           directory: options.stateDirectory,
         });
         try {
@@ -105,6 +106,7 @@ export async function interactive(
       },
       readArtifact: async (id) => {
         const store = await SqliteSessionStore.open(current.root, {
+          readOnlySnapshot: true,
           directory: options.stateDirectory,
         });
         try {

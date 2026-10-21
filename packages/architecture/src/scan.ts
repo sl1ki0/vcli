@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { openHostFileSystem } from "@vcli/core";
 import type {
   ArchitectureEdge,
   ArchitectureGraph,
@@ -18,9 +18,11 @@ export async function scan(
   scope?: ArchitectureScanScope,
 ): Promise<ArchitectureGraph> {
   const started = performance.now();
-  const root = resolve(rootPath);
-  if (!(await stat(root)).isDirectory())
-    throw new Error(`Architecture root is not a directory: ${root}`);
+  // Preserve the launch alias in the host's identity binding. Canonicalizing
+  // first would let a replaced root symlink become a newly approved directory.
+  const filesystem = openHostFileSystem(rootPath);
+  const root = filesystem.root;
+  filesystem.close();
   const diagnostics: string[] = [];
   const paths = await inventory(root, diagnostics, scope);
   // A full-project cache may contain denied source facts. Scoped scans neither read nor replace it.

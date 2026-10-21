@@ -1,7 +1,7 @@
-import { chmod, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { configHome, writeJsonAtomic, type Config } from "./config.ts";
-import { readStorageText } from "./workflows/state-path.ts";
+import { basename, dirname } from "node:path";
+import { configHome, type Config } from "./config.ts";
+import { readStorageText, storageFilesystem, storagePath } from "./workflows/state-path.ts";
+import { enforceUnixMode } from "./workflows/rooted-filesystem.ts";
 import {
   OPENROUTER_BASE_URL,
   DEFAULT_PROVIDER_ENDPOINTS,
@@ -61,7 +61,10 @@ export function validateApiKey(value: string): string {
 async function readCredentials(): Promise<CredentialFile> {
   try {
     const file: unknown = JSON.parse(
-      await readStorageText(join(configHome(), "credentials.json"), 1024 * 1024),
+      await readStorageText(
+        await storagePath("/", ["credentials.json"], configHome()),
+        1024 * 1024,
+      ),
     );
     if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("Invalid store");
     const { version, keys } = file as CredentialFile;
@@ -87,9 +90,10 @@ export async function saveCredential(target: CredentialTarget, apiKey: string): 
   const state = await readCredentials();
   state.keys[scope] = key;
   try {
-    await mkdir(configHome(), { recursive: true, mode: 0o700 });
-    await chmod(configHome(), 0o700);
-    await writeJsonAtomic(join(configHome(), "credentials.json"), state);
+    const path = await storagePath("/", ["credentials.json"], configHome());
+    using filesystem = storageFilesystem(dirname(path), true);
+    enforceUnixMode(filesystem.rootFd, 0o700);
+    filesystem.writeAtomic(basename(path), JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
   } catch {
     throw new Error("Could not save the API key");
   }

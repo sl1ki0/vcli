@@ -1,4 +1,4 @@
-import { opendir } from "node:fs/promises";
+import { isPrivateProjectPath, openHostFileSystem } from "@vcli/core";
 import { join, relative } from "node:path";
 import { compare, matchesPath, slash } from "./utils.ts";
 import { readArchitectureFile } from "./state-path.ts";
@@ -55,7 +55,7 @@ export async function inventory(
       const ignorePath = join(directory, ".gitignore");
       const text =
         !scope || (await scope.allowFile(ignorePath))
-          ? await readArchitectureFile(ignorePath, 65_536)
+          ? await readArchitectureFile(root, ignorePath, 65_536)
           : "";
       ignoreBytes += Buffer.byteLength(text);
       if (ignoreBytes > 4 * 1024 * 1024)
@@ -82,13 +82,21 @@ export async function inventory(
           `Could not read ${slash(relative(root, directory)) || "."}/.gitignore: ${(error as Error).message}`,
         );
     }
-    for await (const entry of await opendir(directory)) {
+    const filesystem = openHostFileSystem(root, { canonicalRoot: true });
+    let entries;
+    try {
+      entries = filesystem.list(directory, MAX_INVENTORY_ENTRIES - entriesSeen);
+    } finally {
+      filesystem.close();
+    }
+    for (const entry of entries) {
       if (++entriesSeen > MAX_INVENTORY_ENTRIES)
         throw new ArchitectureScanLimitError(
           "Architecture scan inventory exceeds 100,000 entries.",
         );
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory() && ALWAYS_IGNORED.has(entry.name)) continue;
+      if (entry.kind === "symlink") continue;
+      if (isPrivateProjectPath(entry.name)) continue;
+      if (entry.kind === "directory" && ALWAYS_IGNORED.has(entry.name)) continue;
       const absolute = join(directory, entry.name),
         path = slash(relative(root, absolute));
       let ignored = false;
@@ -105,8 +113,9 @@ export async function inventory(
         if (matched) ignored = !rule.negate;
       }
       if (ignored) continue;
-      if (entry.isDirectory()) await walk(absolute, rules, depth + 1);
-      else if (entry.isFile() && (!scope || (await scope.allowFile(absolute)))) files.push(path);
+      if (entry.kind === "directory") await walk(absolute, rules, depth + 1);
+      else if (entry.kind === "file" && (!scope || (await scope.allowFile(absolute))))
+        files.push(path);
       if (files.length > MAX_INVENTORY_FILES)
         throw new ArchitectureScanLimitError("Architecture scan inventory exceeds 20,000 files.");
     }

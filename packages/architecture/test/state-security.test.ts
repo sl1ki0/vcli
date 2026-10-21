@@ -1,10 +1,42 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile, link } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+  link,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createArchitectureService } from "../src/index.ts";
 
 const design = { version: 1 as const, components: [], decisions: ["external fixture"] };
+
+test("architecture preserves the approved root identity across later scans", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vcli-architecture-root-"));
+  const root = join(directory, "project");
+  const outside = join(directory, "outside");
+  try {
+    await mkdir(root);
+    await mkdir(outside);
+    await writeFile(join(root, "main.ts"), "export const approved = 1;");
+    await writeFile(join(outside, "private.ts"), 'export const secret = "SYNTHETIC_OUTSIDE";');
+    const service = createArchitectureService();
+    await service.scan(root);
+    await rename(root, join(directory, "original"));
+    await symlink(outside, root);
+    await expect(service.scan(root)).rejects.toThrow();
+    await expect(service.readDesign(root)).rejects.toThrow();
+    await expect(service.writeDesign(root, design)).rejects.toThrow();
+    expect(await readdir(outside)).toEqual(["private.ts"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("architecture reads and writes refuse a symlinked metadata directory", async () => {
   const directory = await mkdtemp(join(tmpdir(), "vcli-architecture-security-"));
@@ -110,7 +142,7 @@ test.skipIf(process.platform === "win32")(
       await writeFile(join(root, "dep.ts"), "export const value = 1;");
       const graph = await createArchitectureService().scan(root);
       expect(graph.nodes.some((value) => value.path === "main.ts")).toBe(true);
-      expect(graph.diagnostics.some((value) => value.includes("regular files"))).toBe(true);
+      expect(graph.diagnostics.some((value) => value.includes("regular file"))).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

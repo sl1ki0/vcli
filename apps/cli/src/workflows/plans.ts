@@ -1,6 +1,5 @@
-import { mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import type { RunPlanState, Session } from "@vcli/core";
-import { readStorageText, storagePath } from "./state-path.ts";
+import { storageFilesystem, storagePath } from "./state-path.ts";
 
 const statusLabel = { pending: "○", "in-progress": "◐", complete: "✓" } as const;
 
@@ -67,25 +66,12 @@ export async function savePlan(
   const parts = options.directory ? ["plans"] : ["state", "plans"];
   const path = (name?: string) =>
     storagePath(root, name ? [...parts, name] : parts, options.directory);
-  await mkdir(await path(), { recursive: true, mode: 0o700 });
+  using filesystem = storageFilesystem(await path(), true);
   await path(`${session.id}.md`);
   if (session.plan) await path(`${session.id}.json`);
   const write = async (name: string, content: string) => {
-    const temporary = `${name}.${crypto.randomUUID()}.tmp`;
-    let created = false;
-    try {
-      const file = await open(await path(temporary), "wx", 0o600);
-      created = true;
-      try {
-        await file.writeFile(content);
-        await file.sync();
-      } finally {
-        await file.close();
-      }
-      await rename(await path(temporary), await path(name));
-    } finally {
-      if (created) await rm(await path(temporary), { force: true });
-    }
+    await path(name);
+    filesystem.writeAtomic(name, content, { mode: 0o600 });
   };
   await write(
     `${session.id}.md`,
@@ -107,19 +93,30 @@ export async function readPlans(
   if (runId && !/^[\w.-]+$/.test(runId)) throw new Error("Invalid plan run ID.");
   const parts = options.directory ? ["plans"] : ["state", "plans"];
   const directory = await storagePath(root, parts, options.directory);
-  const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
+  let filesystem: ReturnType<typeof storageFilesystem>;
+  try {
+    filesystem = storageFilesystem(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return "No plans yet. Use /plan, then describe the change. /build enables implementation.";
     throw error;
-  });
+  }
+  using ownedFilesystem = filesystem;
+  const entries = ownedFilesystem.list().map((entry) => entry.name);
   const plans = await Promise.all(
     entries
       .filter((name) => name.endsWith(".md") && (!runId || name === `${runId}.md`))
       .sort()
       .slice(-20)
-      .map(
-        async (name) =>
-          `Plan ${name.slice(0, -3)}\n${await readStorageText(await storagePath(root, [...parts, name], options.directory))}`,
-      ),
+      .map(async (name) => {
+        try {
+          return `Plan ${name.slice(0, -3)}\n${ownedFilesystem.readText(name, 32 * 1024 * 1024)}`;
+        } catch (error) {
+          throw new Error(
+            `Storage plan file refused: ${error instanceof Error ? error.message : "unreadable file"}`,
+          );
+        }
+      }),
   );
   return (
     plans.join("\n\n") ||

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { fstatSync, readSync } from "node:fs";
 import { estimateTokens, type ToolDefinition } from "@vcli/core";
 import { objectSchema, stringSchema } from "../tools/schema.ts";
+import { retryInterrupted, RootedFileSystem } from "./rooted-filesystem.ts";
 
 const MEMORY_PATH = ".vcli/MEMORY.md";
 const SOURCE_PATHS = ["AGENTS.md", "CLAUDE.md", MEMORY_PATH];
@@ -27,43 +26,28 @@ function prefix(text: string, bytes: number): string {
   return encoded.subarray(0, end).toString("utf8");
 }
 
-/** Instruction sources are project data; never follow them into user files or private state. */
-async function instructionPath(root: string, source: string): Promise<string> {
-  const canonicalRoot = await realpath(root);
-  const path = join(canonicalRoot, source);
-  if (source === MEMORY_PATH) {
-    try {
-      const directory = await lstat(join(canonicalRoot, ".vcli"));
-      if (!directory.isDirectory() || directory.isSymbolicLink())
-        throw new Error(
-          "Project memory requires a regular .vcli directory without symbolic links.",
-        );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-  return path;
-}
-
 async function readBounded(
   root: string,
   source: string,
 ): Promise<{ text: string; truncated: boolean }> {
-  const path = await instructionPath(root, source);
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const stats = await handle.stat();
-    if (!stats.isFile() || stats.nlink > 1)
-      throw new Error("expected a regular file without hard links");
+  using filesystem = new RootedFileSystem(root, { allowProtectedPaths: true });
+  return filesystem.withFile(source, (fd) => {
+    const stats = retryInterrupted(() => fstatSync(fd, { bigint: true }));
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const truncated = bytesRead > MAX_FILE_BYTES || stats.size > MAX_FILE_BYTES;
+    const bytesRead = retryInterrupted(() => readSync(fd, buffer, 0, buffer.length, 0));
+    const after = retryInterrupted(() => fstatSync(fd, { bigint: true }));
+    if (
+      stats.size !== after.size ||
+      stats.mtimeNs !== after.mtimeNs ||
+      stats.ctimeNs !== after.ctimeNs ||
+      after.nlink !== 1n
+    )
+      throw new Error("Instruction source changed while reading; retry after writes finish.");
+    const truncated = bytesRead > MAX_FILE_BYTES || stats.size > BigInt(MAX_FILE_BYTES);
     let end = Math.min(bytesRead, MAX_FILE_BYTES);
     while (truncated && end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
     return { text: buffer.subarray(0, end).toString("utf8"), truncated };
-  } finally {
-    await handle.close();
-  }
+  });
 }
 
 /** Reload per run. Only root instructions are automatic; nested instructions need explicit reads. */
@@ -103,24 +87,6 @@ export async function loadProjectMemory(
   }
   memory.text = sections.join("");
   return memory;
-}
-
-async function writableMemoryPath(root: string): Promise<string> {
-  const checked = await instructionPath(root, MEMORY_PATH);
-  const canonicalRoot = await realpath(root);
-  const directory = join(canonicalRoot, ".vcli");
-  await mkdir(directory, { recursive: true });
-  if ((await realpath(directory)) !== directory)
-    throw new Error("Project memory cannot be written through a symlinked .vcli directory.");
-  const path = checked;
-  try {
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.nlink > 1)
-      throw new Error("Project memory must be a regular file without hard links.");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return path;
 }
 
 /** Permission enforcement remains in the shared executor; these tools declare read/write kinds. */
@@ -169,7 +135,7 @@ export function createMemoryTools(): ToolDefinition[] {
             "Project memory is limited to 4000 estimated tokens; keep durable notes concise.",
           );
         context.signal.throwIfAborted();
-        const path = await writableMemoryPath(context.root);
+        using filesystem = new RootedFileSystem(context.root, { allowProtectedPaths: true });
         let current: string | undefined;
         try {
           const content = await readBounded(context.root, MEMORY_PATH);
@@ -181,14 +147,11 @@ export function createMemoryTools(): ToolDefinition[] {
         }
         if ((current === undefined ? null : revision(current)) !== args.expectedRevision)
           throw new Error("Project memory changed; read it again before writing.");
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-        try {
-          await writeFile(temporary, text, { flag: "wx", mode: 0o600 });
-          context.signal.throwIfAborted();
-          await rename(temporary, path);
-        } finally {
-          await unlink(temporary).catch(() => {});
-        }
+        const before = filesystem.snapshot(MEMORY_PATH, MAX_FILE_BYTES);
+        if ((before?.digest ?? null) !== args.expectedRevision)
+          throw new Error("Project memory changed; read it again before writing.");
+        context.signal.throwIfAborted();
+        filesystem.writeAtomic(MEMORY_PATH, text, { expected: before ?? null, mode: 0o600 });
         return {
           text: "Saved project memory; it will be reloaded on the next run.",
           changedPaths: [MEMORY_PATH],

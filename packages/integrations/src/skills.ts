@@ -1,6 +1,6 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { Skill } from "@vcli/core";
+import { openHostFileSystem, type Skill } from "@vcli/core";
 import { containedPath, exists, message, object, readPackageText, validateName } from "./paths.ts";
 
 export const projectSkillLocations = [
@@ -36,14 +36,23 @@ export async function discoverSkills(
     try {
       if (!(await exists(join(root, location)))) continue;
       const directory = await containedPath(root, location);
-      if (!(await stat(directory)).isDirectory())
-        throw new Error(`Skill location is not a directory: ${location}`);
-      const paths = (await exists(join(directory, "SKILL.md")))
-        ? [join(directory, "SKILL.md")]
-        : (await readdir(directory, { withFileTypes: true }))
-            .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((entry) => join(directory, entry.name, "SKILL.md"));
+      const filesystem = openHostFileSystem("/", {
+        canonicalRoot: true,
+        allowProtectedPaths: true,
+      });
+      let paths: string[];
+      try {
+        if (!filesystem.stat(directory)?.isDirectory())
+          throw new Error(`Skill location is not a directory: ${location}`);
+        paths = (await exists(join(directory, "SKILL.md")))
+          ? [join(directory, "SKILL.md")]
+          : filesystem
+              .list(directory)
+              .filter((entry) => entry.kind === "directory" || entry.kind === "symlink")
+              .map((entry) => join(directory, entry.name, "SKILL.md"));
+      } finally {
+        filesystem.close();
+      }
       for (const path of paths) {
         if (!(await exists(path))) continue;
         try {

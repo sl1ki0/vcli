@@ -1,6 +1,4 @@
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type {
   ArchitectureDesign,
   ArchitectureEdge,
@@ -11,7 +9,7 @@ import type {
 } from "@vcli/core";
 import { emptyStats, findCycles, graphRevision } from "./graph.ts";
 import { compare, matchesPath, slash } from "./utils.ts";
-import { architectureStatePath, readArchitectureState } from "./state-path.ts";
+import { writeArchitectureState, readArchitectureState } from "./state-path.ts";
 
 export class ArchitectureDesignError extends Error {
   constructor(message: string) {
@@ -92,18 +90,7 @@ export async function writeDesign(root: string, value: ArchitectureDesign): Prom
   const content = `${JSON.stringify(design, null, 2)}\n`;
   if (Buffer.byteLength(content) > 1024 * 1024)
     throw new ArchitectureDesignError("design exceeds 1 MiB");
-  const destination = await architectureStatePath(root, "architecture.json");
-  const directory = await architectureStatePath(root);
-  await mkdir(directory, { recursive: true });
-  await architectureStatePath(root, "architecture.json");
-  const temporary = join(directory, `.architecture-${randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, content, { mode: 0o600, flag: "wx" });
-    await architectureStatePath(root, "architecture.json");
-    await rename(temporary, destination);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  writeArchitectureState(root, ".vcli/architecture.json", content);
 }
 
 export function intendedGraph(root: string, value: ArchitectureDesign): ArchitectureGraph {

@@ -1,6 +1,6 @@
 import { basename, join } from "node:path";
-import { realpath, stat } from "node:fs/promises";
-import type { Plugin, PluginEcosystem } from "@vcli/core";
+import { realpath } from "node:fs/promises";
+import { openHostFileSystem, type Plugin, type PluginEcosystem } from "@vcli/core";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/client";
 import { containedPath, exists, message, object, readJson, validateName } from "./paths.ts";
@@ -226,7 +226,12 @@ export async function loadPlugin(
   options: LoadPluginOptions = {},
 ): Promise<Plugin> {
   const root = await realpath(directory);
-  if (!(await stat(root)).isDirectory()) throw new Error("Plugin root must be a directory");
+  const filesystem = openHostFileSystem("/", { canonicalRoot: true, allowProtectedPaths: true });
+  try {
+    if (!filesystem.stat(root)?.isDirectory()) throw new Error("Plugin root must be a directory");
+  } finally {
+    filesystem.close();
+  }
   const { manifest, ecosystem } = await readManifest(root, options);
   const name = validateName(manifest.name, "Plugin name");
   if (manifest.version !== undefined && typeof manifest.version !== "string")

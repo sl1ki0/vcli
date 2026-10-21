@@ -1,63 +1,53 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { openHostFileSystem } from "@vcli/core";
 
-/** Architecture metadata may never redirect local reads or writes outside the project. */
+/** Metadata names are fixed by the host; actual access is descriptor-rooted. */
 export async function architectureStatePath(root: string, ...parts: string[]): Promise<string> {
   if (parts.some((part) => !part || part === "." || part === ".." || /[\\/\0]/.test(part)))
     throw new Error("Invalid architecture state path component.");
-  let path = await realpath(root);
-  const components = [".vcli", ...parts];
-  for (let index = 0; index < components.length; index++) {
-    path = join(path, components[index]!);
-    try {
-      const info = await lstat(path);
-      if (info.isSymbolicLink())
-        throw new Error("Architecture state cannot contain symbolic links.");
-      if (index < components.length - 1 && !info.isDirectory())
+  const filesystem = openHostFileSystem(root, {
+    allowProtectedPaths: true,
+  });
+  try {
+    const components = [".vcli", ...parts];
+    for (let index = 0; index < components.length; index++) {
+      const info = filesystem.stat(components.slice(0, index + 1).join("/"));
+      if (info && index < components.length - 1 && !info.isDirectory())
         throw new Error("Architecture state parent must be a directory.");
-      if (
-        index === components.length - 1 &&
-        !info.isDirectory() &&
-        (!info.isFile() || info.nlink > 1)
-      )
-        throw new Error("Architecture state requires regular files without hard links.");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    return join(filesystem.root, ...components);
+  } finally {
+    filesystem.close();
   }
-  return path;
 }
 
-/** Bound reads even if a regular metadata file grows after it is opened. */
 export async function readArchitectureState(
   root: string,
   parts: string[],
   maximum: number,
 ): Promise<string> {
-  const path = await architectureStatePath(root, ...parts);
-  return readArchitectureFile(path, maximum);
+  return readArchitectureFile(root, `.vcli/${parts.join("/")}`, maximum, true);
 }
 
-export async function readArchitectureFile(path: string, maximum: number): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+export async function readArchitectureFile(
+  root: string,
+  path: string,
+  maximum: number,
+  protectedPaths = false,
+): Promise<string> {
+  const filesystem = openHostFileSystem(root, { allowProtectedPaths: protectedPaths });
   try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.nlink > 1)
-      throw new Error("Architecture state requires regular files without hard links.");
-    if (info.size > maximum) throw new Error("Architecture state exceeds its size limit.");
-    const chunks: Buffer[] = [];
-    let total = 0;
-    while (total <= maximum) {
-      const buffer = Buffer.alloc(Math.min(65_536, maximum + 1 - total));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (!bytesRead) break;
-      total += bytesRead;
-      if (total > maximum) throw new Error("Architecture state exceeds its size limit.");
-      chunks.push(buffer.subarray(0, bytesRead));
-    }
-    return Buffer.concat(chunks, total).toString("utf8");
+    return filesystem.readText(path, maximum);
   } finally {
-    await handle.close();
+    filesystem.close();
+  }
+}
+
+export function writeArchitectureState(root: string, path: string, content: string): void {
+  const filesystem = openHostFileSystem(root, { allowProtectedPaths: true });
+  try {
+    filesystem.writeAtomic(path, content, { mode: 0o600 });
+  } finally {
+    filesystem.close();
   }
 }

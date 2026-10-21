@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import "./workflows/host-filesystem.ts";
 import { createArchitectureService } from "@vcli/architecture";
 import { configOverrides, parseCliArgs, resolveSettings } from "./args.ts";
 import { HELP } from "./help.ts";

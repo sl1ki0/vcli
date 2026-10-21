@@ -26,7 +26,7 @@ export async function readPackages(
   let manifestBytes = 0;
   for (const path of paths.filter((p) => basename(p) === "package.json")) {
     try {
-      const text = await readArchitectureFile(join(root, path), 1024 * 1024);
+      const text = await readArchitectureFile(root, join(root, path), 1024 * 1024);
       manifestBytes += Buffer.byteLength(text);
       if (manifestBytes > 16 * 1024 * 1024)
         throw new ArchitectureScanLimitError("Architecture scan package metadata exceeds 16 MiB.");

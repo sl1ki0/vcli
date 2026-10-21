@@ -1,12 +1,4 @@
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readSync,
-  realpathSync,
-} from "node:fs";
+import { isPrivateProjectPath, openHostFileSystem } from "@vcli/core";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
 import { slash } from "./utils.ts";
@@ -17,24 +9,19 @@ export function createCompilerResolver(
   diagnostics: string[],
   allowedPaths?: Set<string>,
 ) {
-  const canonicalRoot = realpathSync(root);
+  const filesystem = openHostFileSystem(root, { canonicalRoot: true });
   const withinRoot = (path: string): boolean => {
-    const part = relative(canonicalRoot, realpathSync(path));
+    const part = relative(root, path);
     return (
-      part !== ".." &&
-      !part.startsWith("../") &&
-      !isAbsolute(part) &&
-      ![".vcli", ".git"].includes(part.split(/[\\/]/)[0]!.toLowerCase())
+      part !== ".." && !part.startsWith("../") && !isAbsolute(part) && !isPrivateProjectPath(part)
     );
   };
   const fileExists = (path: string): boolean => {
     try {
-      const info = lstatSync(path);
       return (
-        info.isFile() &&
-        info.nlink === 1 &&
         withinRoot(path) &&
-        (!allowedPaths || allowedPaths.has(path))
+        (!allowedPaths || allowedPaths.has(path)) &&
+        filesystem.stat(path)?.isFile() === true
       );
     } catch {
       return false;
@@ -42,31 +29,17 @@ export function createCompilerResolver(
   };
   const directoryExists = (path: string): boolean => {
     try {
-      return lstatSync(path).isDirectory() && withinRoot(path);
+      return withinRoot(path) && filesystem.stat(path)?.isDirectory() === true;
     } catch {
       return false;
     }
   };
   const readFile = (path: string): string | undefined => {
     if (!fileExists(path)) return undefined;
-    let descriptor: number | undefined;
     try {
-      descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      const info = fstatSync(descriptor);
-      const maximum = 1024 * 1024;
-      if (!info.isFile() || info.nlink !== 1 || info.size > maximum) return undefined;
-      const buffer = Buffer.alloc(maximum + 1);
-      let length = 0;
-      while (length < buffer.length) {
-        const count = readSync(descriptor, buffer, length, buffer.length - length, length);
-        if (!count) break;
-        length += count;
-      }
-      return length <= maximum ? buffer.subarray(0, length).toString("utf8") : undefined;
+      return filesystem.readText(path, 1024 * 1024);
     } catch {
       return undefined;
-    } finally {
-      if (descriptor !== undefined) closeSync(descriptor);
     }
   };
   const host: ts.ParseConfigHost & ts.ModuleResolutionHost = {
@@ -77,7 +50,7 @@ export function createCompilerResolver(
     // Only compiler options are needed: the inventory already owns file traversal.
     readDirectory: () => [],
     getCurrentDirectory: () => root,
-    realpath: (path) => realpathSync(path),
+    realpath: (path) => path,
   };
   const optionsCache = new Map<string, ts.CompilerOptions>();
   const resolutionCaches = new Map<string, ts.ModuleResolutionCache>();
@@ -129,6 +102,7 @@ export function createCompilerResolver(
     return { key, options: optionsCache.get(key)! };
   }
   return {
+    close: () => filesystem.close(),
     resolve(specifier: string, file: string) {
       const { key, options } = optionsFor(file);
       return ts.resolveModuleName(specifier, file, options, host, resolutionCaches.get(key))

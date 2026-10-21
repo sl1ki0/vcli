@@ -1,6 +1,6 @@
-import { constants } from "node:fs";
-import { access, open, realpath } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { openHostFileSystem } from "@vcli/core";
 
 export function validateName(name: unknown, label = "Name"): string {
   if (
@@ -62,23 +62,19 @@ export async function readPackageText(
   limit = 1024 * 1024,
   prefixOnly = false,
 ): Promise<string> {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const filesystem = openHostFileSystem("/", { canonicalRoot: true, allowProtectedPaths: true });
   try {
-    const info = await file.stat();
-    if (!info.isFile()) throw new Error(`Package content must be a regular file: ${path}`);
-    if (!prefixOnly && info.size > limit)
-      throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
-    const buffer = Buffer.alloc(limit + (prefixOnly ? 0 : 1));
-    let total = 0;
-    while (total < buffer.length) {
-      const { bytesRead } = await file.read(buffer, total, buffer.length - total, total);
-      if (bytesRead === 0) break;
-      total += bytesRead;
+    const absolute = resolve(path);
+    if (prefixOnly) return Buffer.from(filesystem.readPrefix(absolute, limit)).toString("utf8");
+    try {
+      return filesystem.readText(absolute, limit);
+    } catch (error) {
+      if (message(error).includes("byte limit"))
+        throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
+      throw error;
     }
-    if (total > limit) throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
-    return buffer.subarray(0, total).toString("utf8");
   } finally {
-    await file.close();
+    filesystem.close();
   }
 }
 
