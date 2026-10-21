@@ -91,6 +91,7 @@ export async function chatSmoke(command: string | string[]) {
     env: {
       VCLI_CONFIG_HOME: home,
       VCLI_COMPATIBLE_API_KEY: KEY,
+      VCLI_COMPATIBLE_BASE_URL: server.url.origin,
     },
     secrets: [KEY],
   };

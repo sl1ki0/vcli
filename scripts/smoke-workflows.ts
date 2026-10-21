@@ -126,6 +126,7 @@ export async function workflowsSmoke(command: string | string[]) {
         ...Bun.env,
         VCLI_CONFIG_HOME: join(root, "configuration"),
         VCLI_COMPATIBLE_API_KEY: "local-fixture-key",
+        VCLI_COMPATIBLE_BASE_URL: server.url.origin,
       },
       stdout: "pipe",
       stderr: "pipe",

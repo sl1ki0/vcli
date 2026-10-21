@@ -612,7 +612,7 @@ describe("architecture-first harness acceptance", () => {
       await writeFile(join(root, "src/index.ts"), "aaa");
       harness = await createHarness(
         root,
-        await settings(root, "http://unused.invalid"),
+        await settings(root, "http://127.0.0.1:9"),
         createArchitectureService(),
       );
       await expect(
@@ -670,7 +670,7 @@ describe("MCP discovery cancellation acceptance", () => {
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     let pending: Promise<unknown> | undefined;
     try {
-      const config = await settings(root, "http://unused.invalid");
+      const config = await settings(root, "http://127.0.0.1:9");
       config.mcpServers = [{ name: "fixture", type: "http", url: server.url.href }];
       harness = await createHarness(root, config, createArchitectureService());
       const search = (signal: AbortSignal) =>

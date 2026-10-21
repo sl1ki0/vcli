@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createArchitectureService } from "@vcli/architecture";
@@ -17,6 +17,7 @@ const environmentNames = [
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "VCLI_COMPATIBLE_API_KEY",
+  "VCLI_COMPATIBLE_BASE_URL",
 ];
 let directory: string;
 let root: string;
@@ -92,6 +93,57 @@ describe("workspace setup backend", () => {
     });
   });
 
+  test("project endpoints cannot inherit vendor environment keys or another compatible endpoint key", async () => {
+    const providers = [
+      ["openai", "OPENAI_API_KEY", "https://api.openai.com/v1"],
+      ["anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com"],
+      ["gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com"],
+      ["openrouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"],
+    ] as const;
+    for (const [provider, variable, baseURL] of providers) {
+      process.env[variable] = "fixture-vendor-environment-key";
+      expect(await resolveCredential({ provider, baseURL })).toEqual({
+        status: "environment",
+        apiKey: "fixture-vendor-environment-key",
+      });
+      await put(join(root, ".vcli/config.json"), {
+        provider,
+        model: "fixture-model",
+        baseURL: "https://attacker.invalid/v1",
+      });
+      expect(await resolveCredential(await loadConfig(root))).toEqual({ status: "missing" });
+      expect(credentialScope({ provider, baseURL })).toBe(credentialScope({ provider }));
+    }
+    process.env.VCLI_COMPATIBLE_API_KEY = "fixture-compatible-environment-key";
+    const target = { provider: "compatible" as const, baseURL: "http://localhost:9000/v1" };
+    expect(await resolveCredential(target)).toEqual({ status: "not-required" });
+    process.env.VCLI_COMPATIBLE_BASE_URL = target.baseURL + "/";
+    expect(await resolveCredential(target)).toEqual({
+      status: "environment",
+      apiKey: "fixture-compatible-environment-key",
+    });
+    expect(await resolveCredential({ ...target, baseURL: "http://localhost:9001/v1" })).toEqual({
+      status: "not-required",
+    });
+  });
+
+  test("remote unauthenticated project endpoints cannot receive model context", async () => {
+    await put(join(root, ".vcli/config.json"), {
+      provider: "compatible",
+      model: "fixture-model",
+      baseURL: "https://attacker.invalid/v1",
+    });
+    const config = await loadConfig(root);
+    expect(await resolveCredential(config)).toEqual({ status: "missing" });
+    await expect(createHarness(root, config, createArchitectureService())).rejects.toThrow(
+      "No compatible API key configured",
+    );
+    expect(await resolveCredential(config, "explicit-authless-placeholder")).toEqual({
+      status: "session",
+      apiKey: "explicit-authless-placeholder",
+    });
+  });
+
   test("rejects unsupported reasoning before changing settings or saving a connection key", async () => {
     const settings = createWorkspaceSettings(root, await loadConfig(root));
     await settings.configure({
@@ -143,7 +195,7 @@ describe("workspace setup backend", () => {
       await resolveCredential({ provider: "openrouter", baseURL: "https://other.invalid/api/v1" }),
     ).toEqual({ status: "missing" });
     expect(await resolveCredential({ provider: "compatible", baseURL: explicit.baseURL })).toEqual({
-      status: "not-required",
+      status: "missing",
     });
     await settings.configure({
       kind: "connection",
@@ -162,6 +214,23 @@ describe("workspace setup backend", () => {
     expect(await readFile(join(root, ".vcli/config.json"), "utf8")).not.toContain(
       "router-fixture-key",
     );
+  });
+
+  test("legacy saved canonical endpoint keys remain available after scope normalization", async () => {
+    await put(join(home, "credentials.json"), {
+      version: 1,
+      keys: { "openai:https://api.openai.com/v1": "fixture-legacy-canonical-key" },
+    });
+    expect(await resolveCredential({ provider: "openai" })).toEqual({
+      status: "saved",
+      apiKey: "fixture-legacy-canonical-key",
+    });
+    expect(
+      await resolveCredential({ provider: "openai", baseURL: "https://api.openai.com/v1/" }),
+    ).toEqual({ status: "saved", apiKey: "fixture-legacy-canonical-key" });
+    expect(
+      await resolveCredential({ provider: "openai", baseURL: "https://attacker.invalid/v1" }),
+    ).toEqual({ status: "missing" });
   });
 
   test("reasoning persists across settings snapshots, reloads and a real OpenRouter SDK request", async () => {
@@ -321,6 +390,7 @@ describe("workspace setup backend", () => {
       const target = { provider: "compatible" as const, baseURL: model.server.url.origin };
       await saveCredential(target, "fixture-old-saved-key");
       process.env.VCLI_COMPATIBLE_API_KEY = "fixture-environment-key";
+      process.env.VCLI_COMPATIBLE_BASE_URL = target.baseURL;
       const settings = createWorkspaceSettings(root, await loadConfig(root));
       await settings.configure({
         kind: "connection",
@@ -471,23 +541,126 @@ describe("workspace setup backend", () => {
     expect((await settings.snapshot()).permission).toBe("ask");
   });
 
-  test("clearing a task budget overrides an inherited user cap across reload", async () => {
+  test("project permission cannot relax a user ceiling, including through workspace settings", async () => {
+    for (const permission of ["ask", "read-only"] as const) {
+      await put(join(home, "config.json"), { permission });
+      await put(join(root, ".vcli/config.json"), { permission: "yolo" });
+      const path = join(root, ".vcli/config.json");
+      const before = await readFile(path, "utf8");
+      expect((await loadConfig(root)).permission).toBe(permission);
+      expect((await loadConfig(root, { permission: "yolo" })).permission).toBe("yolo");
+      const settings = createWorkspaceSettings(root, await loadConfig(root));
+      await expect(settings.configure({ kind: "permission", permission: "yolo" })).rejects.toThrow(
+        "cannot weaken the user permission",
+      );
+      expect(await readFile(path, "utf8")).toBe(before);
+      expect((await settings.snapshot()).permission).toBe(permission);
+      await patchConfig(root, { permission: "read-only" });
+      expect((await loadConfig(root)).permission).toBe("read-only");
+    }
+    await patchConfig(root, { permission: "yolo" }, false);
+    expect((await loadConfig(root)).permission).toBe("read-only");
+    await patchConfig(root, { permission: "yolo" });
+    expect((await loadConfig(root)).permission).toBe("yolo");
+  });
+
+  test("clearing a user task budget requires updating the user setting before project settings", async () => {
     await put(join(home, "config.json"), { context: { taskTokens: 50_000 } });
     const settings = createWorkspaceSettings(root, await loadConfig(root));
     expect((await settings.snapshot()).context.taskTokens).toBe(50_000);
-    const updated = await settings.configure({
+    const update = {
       kind: "budgets",
       contextWindow: 32_768,
       context: { ...balanced },
-    });
+    } as const;
+    await expect(settings.configure(update)).rejects.toThrow("cannot weaken the user token limit");
+    expect((await settings.snapshot()).context.taskTokens).toBe(50_000);
+    expect((await loadConfig(root)).context.taskTokens).toBe(50_000);
+    await patchConfig(root, { context: { taskTokens: null } }, false);
+    const updated = await settings.configure(update);
     expect(updated.context.taskTokens).toBeUndefined();
     expect((await loadConfig(root)).context.taskTokens).toBeUndefined();
     expect(
       JSON.parse(await readFile(join(root, ".vcli/config.json"), "utf8")).context.taskTokens,
     ).toBeNull();
     expect(JSON.parse(await readFile(join(home, "config.json"), "utf8")).context.taskTokens).toBe(
-      50_000,
+      null,
     );
+  });
+
+  test("project configuration cannot expand or clear explicit user spending limits", async () => {
+    await put(join(home, "config.json"), {
+      context: { taskTokens: 5000 },
+      runLimits: { modelRequests: 3, toolCalls: 5 },
+    });
+    await put(join(root, ".vcli/config.json"), {
+      context: { taskTokens: null },
+      runLimits: { modelRequests: 99, toolCalls: 2, sideEffects: 7 },
+    });
+    const path = join(root, ".vcli/config.json");
+    const before = await readFile(path, "utf8");
+    expect(await loadConfig(root)).toMatchObject({
+      context: { taskTokens: 5000 },
+      runLimits: { modelRequests: 3, toolCalls: 2, sideEffects: 7 },
+    });
+    for (const taskTokens of [null, 6000])
+      await expect(patchConfig(root, { context: { taskTokens } })).rejects.toThrow(
+        "cannot weaken the user token limit",
+      );
+    await expect(patchConfig(root, { runLimits: { modelRequests: 4 } })).rejects.toThrow(
+      "cannot exceed the user limit",
+    );
+    expect(await readFile(path, "utf8")).toBe(before);
+    await patchConfig(root, {
+      context: { taskTokens: 4000 },
+      runLimits: { modelRequests: 2 },
+    });
+    expect(await loadConfig(root)).toMatchObject({
+      context: { taskTokens: 4000 },
+      runLimits: { modelRequests: 2, toolCalls: 2, sideEffects: 7 },
+    });
+    expect(
+      await loadConfig(root, {
+        runLimits: { modelRequests: 20 },
+        context: { ...balanced, taskTokens: 9000 },
+      }),
+    ).toMatchObject({ context: { taskTokens: 9000 }, runLimits: { modelRequests: 20 } });
+  });
+
+  test("project configuration refuses linked parent directories before reading or writing", async () => {
+    const outside = join(directory, "outside");
+    await mkdir(outside);
+    const path = join(outside, "config.json");
+    const content = JSON.stringify({ permission: "yolo" });
+    await writeFile(path, content);
+    await symlink(outside, join(root, ".vcli"));
+    await expect(loadConfig(root)).rejects.toThrow("symbolic");
+    await expect(patchConfig(root, { permission: "ask" })).rejects.toThrow("symbolic");
+    expect(await readFile(path, "utf8")).toBe(content);
+  });
+
+  for (const kind of ["symbolic", "hard"] as const)
+    test(`project configuration refuses ${kind}-linked files before reading or writing`, async () => {
+      await mkdir(join(root, ".vcli"));
+      const outside = join(directory, "outside-config.json");
+      const content = JSON.stringify({ permission: "yolo" });
+      await writeFile(outside, content);
+      const path = join(root, ".vcli/config.json");
+      await (kind === "symbolic" ? symlink(outside, path) : link(outside, path));
+      await expect(loadConfig(root)).rejects.toThrow(/Storage/);
+      await expect(patchConfig(root, { permission: "ask" })).rejects.toThrow(/Storage/);
+      expect(await readFile(outside, "utf8")).toBe(content);
+    });
+
+  test("config readers reject named pipes and oversized regular files without opening streams", async () => {
+    await mkdir(join(root, ".vcli"));
+    const path = join(root, ".vcli/config.json");
+    const fifo = Bun.spawn(["mkfifo", path], { stdout: "pipe", stderr: "pipe" });
+    expect(await fifo.exited).toBe(0);
+    await expect(loadConfig(root)).rejects.toThrow("regular files");
+    await rm(path);
+    await writeFile(path, " ".repeat(1024 * 1024 + 1) + "{}");
+    await expect(loadConfig(root)).rejects.toThrow("Invalid config");
   });
 
   test("credential persistence failure leaves project settings and controller unchanged", async () => {
@@ -508,6 +681,35 @@ describe("workspace setup backend", () => {
     expect(await readFile(join(root, ".vcli/config.json"), "utf8")).toBe(before);
     expect(settings.currentConfig().provider).toBe("openai");
     expect(settings.harnessOptions()).toEqual({});
+  });
+
+  test("credential loading rejects linked, FIFO and oversized stores without exposing their contents", async () => {
+    const outside = join(directory, "private-fixture.json");
+    const target = join(home, "credentials.json");
+    await writeFile(
+      outside,
+      JSON.stringify({ version: 1, keys: { "openai:default": "private-credential-fixture" } }),
+    );
+    for (const createLink of [symlink, link]) {
+      await createLink(outside, target);
+      await expect(resolveCredential({ provider: "openai" })).rejects.toThrow(
+        "Could not read the saved credential store",
+      );
+      await rm(target);
+    }
+    const fifo = Bun.spawn(["mkfifo", target], { stdout: "pipe", stderr: "pipe" });
+    expect(await fifo.exited).toBe(0);
+    await expect(resolveCredential({ provider: "openai" })).rejects.toThrow(
+      "Could not read the saved credential store",
+    );
+    await rm(target);
+    await writeFile(
+      target,
+      JSON.stringify({ version: 1, keys: {}, padding: "x".repeat(1024 * 1024) }),
+    );
+    await expect(resolveCredential({ provider: "openai" })).rejects.toThrow(
+      "Could not read the saved credential store",
+    );
   });
 
   test("malformed credential/config diagnostics do not echo secret file contents", async () => {

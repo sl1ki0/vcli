@@ -1,7 +1,13 @@
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { configHome, writeJsonAtomic, type Config } from "./config.ts";
-import { OPENROUTER_BASE_URL } from "@vcli/providers";
+import { readStorageText } from "./workflows/state-path.ts";
+import {
+  OPENROUTER_BASE_URL,
+  DEFAULT_PROVIDER_ENDPOINTS,
+  credentialEnvironmentVariables,
+  isLocalEndpoint,
+} from "@vcli/providers";
 
 export type CredentialTarget = Pick<Config, "provider" | "baseURL">;
 export type CredentialStatus = "environment" | "saved" | "session" | "missing" | "not-required";
@@ -13,14 +19,6 @@ interface CredentialFile {
   version: 1;
   keys: Record<string, string>;
 }
-
-const variables: Record<Config["provider"], string[]> = {
-  openai: ["OPENAI_API_KEY"],
-  openrouter: ["OPENROUTER_API_KEY"],
-  anthropic: ["ANTHROPIC_API_KEY"],
-  gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-  compatible: ["VCLI_COMPATIBLE_API_KEY"],
-};
 
 export function normalizeEndpoint(value?: string): string | undefined {
   if (value === undefined || value === "") return undefined;
@@ -43,8 +41,14 @@ export function normalizeEndpoint(value?: string): string | undefined {
 
 /** Credentials are scoped to both provider and endpoint, including custom hosted providers. */
 export function credentialScope(target: CredentialTarget): string {
-  const endpoint =
+  let endpoint =
     target.baseURL ?? (target.provider === "openrouter" ? OPENROUTER_BASE_URL : undefined);
+  if (
+    target.provider !== "compatible" &&
+    target.provider !== "openrouter" &&
+    normalizeEndpoint(endpoint) === DEFAULT_PROVIDER_ENDPOINTS[target.provider]
+  )
+    endpoint = undefined;
   return `${target.provider}:${normalizeEndpoint(endpoint) ?? "default"}`;
 }
 
@@ -57,7 +61,7 @@ export function validateApiKey(value: string): string {
 async function readCredentials(): Promise<CredentialFile> {
   try {
     const file: unknown = JSON.parse(
-      await readFile(join(configHome(), "credentials.json"), "utf8"),
+      await readStorageText(join(configHome(), "credentials.json"), 1024 * 1024),
     );
     if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("Invalid store");
     const { version, keys } = file as CredentialFile;
@@ -97,12 +101,20 @@ export async function resolveCredential(
   override?: string,
 ): Promise<ResolvedCredential> {
   if (override) return { apiKey: validateApiKey(override), status: "session" };
-  for (const name of variables[target.provider]) {
+  for (const name of credentialEnvironmentVariables(target)) {
     const value = process.env[name];
     if (value?.trim()) return { apiKey: validateApiKey(value), status: "environment" };
   }
-  const saved = (await readCredentials()).keys[credentialScope(target)];
+  const state = await readCredentials();
+  let saved = state.keys[credentialScope(target)];
+  // Older versions stored an explicitly entered default endpoint under its full URL.
+  if (!saved && target.provider !== "compatible" && target.provider !== "openrouter") {
+    const canonical = DEFAULT_PROVIDER_ENDPOINTS[target.provider];
+    if (!target.baseURL || normalizeEndpoint(target.baseURL) === canonical)
+      saved = state.keys[`${target.provider}:${canonical}`];
+  }
   if (saved) return { apiKey: saved, status: "saved" };
-  if (target.provider === "compatible" && target.baseURL) return { status: "not-required" };
+  if (target.provider === "compatible" && isLocalEndpoint(target.baseURL))
+    return { status: "not-required" };
   return { status: "missing" };
 }

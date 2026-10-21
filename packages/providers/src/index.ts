@@ -11,7 +11,14 @@ export type {
   ProviderTransport,
   WireObject,
 } from "./shared.ts";
-export { ProviderError, OPENROUTER_BASE_URL, REASONING_EFFORTS } from "./shared.ts";
+export {
+  ProviderError,
+  OPENROUTER_BASE_URL,
+  DEFAULT_PROVIDER_ENDPOINTS,
+  REASONING_EFFORTS,
+  credentialEnvironmentVariables,
+  isLocalEndpoint,
+} from "./shared.ts";
 export { validateProviderReasoning } from "./reasoning.ts";
 
 export function createProvider(

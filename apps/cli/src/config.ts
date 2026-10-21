@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import {
   balanced,
   type ContextSettings,
@@ -10,6 +10,7 @@ import {
   type RunLimits,
 } from "@vcli/core";
 import { REASONING_EFFORTS } from "@vcli/providers";
+import { readStorageText, storagePath } from "./workflows/state-path.ts";
 
 export interface Config {
   provider: "openai" | "anthropic" | "gemini" | "openrouter" | "compatible";
@@ -42,7 +43,7 @@ const defaults: Config = {
 };
 async function readJson(path: string): Promise<ConfigFile> {
   try {
-    const data: unknown = JSON.parse(await readFile(path, "utf8"));
+    const data: unknown = JSON.parse(await readStorageText(path, 1024 * 1024));
     if (!data || typeof data !== "object" || Array.isArray(data))
       throw new Error("Expected an object");
     return data as ConfigFile;
@@ -149,12 +150,35 @@ function mergeConfig(...layers: ConfigFile[]): Config {
   if (merged.context?.taskTokens === null) merged.context.taskTokens = undefined;
   return validateConfig(merged as Config);
 }
+const permissionStrength: Record<PermissionMode, number> = { yolo: 0, ask: 1, "read-only": 2 };
+function mergeScopedConfig(
+  user: ConfigFile,
+  project: ConfigFile,
+  overrides: ConfigFile = {},
+): Config {
+  const personal = mergeConfig(user);
+  const local = mergeConfig(user, project);
+  // A checkout can restrict the user's policy; only explicit runtime options may relax it.
+  if (permissionStrength[local.permission] < permissionStrength[personal.permission])
+    local.permission = personal.permission;
+  if (personal.context.taskTokens !== undefined)
+    local.context.taskTokens = Math.min(
+      local.context.taskTokens ?? personal.context.taskTokens,
+      personal.context.taskTokens,
+    );
+  for (const [name, ceiling] of Object.entries(personal.runLimits ?? {})) {
+    const key = name as keyof RunLimits;
+    local.runLimits ??= {};
+    local.runLimits[key] = Math.min(local.runLimits[key] ?? ceiling, ceiling);
+  }
+  return mergeConfig({ ...local }, overrides);
+}
 export async function loadConfig(root: string, overrides: Partial<Config> = {}): Promise<Config> {
   const [user, project] = await Promise.all([
     readJson(join(configHome(), "config.json")),
-    readJson(join(root, ".vcli", "config.json")),
+    storagePath(root, ["config.json"]).then(readJson),
   ]);
-  return mergeConfig(user, project, overrides);
+  return mergeScopedConfig(user, project, overrides);
 }
 export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -183,9 +207,17 @@ export async function patchConfig(
     throw new Error("context must be an object");
   const [user, local] = await Promise.all([
     readJson(join(configHome(), "config.json")),
-    readJson(join(root, ".vcli", "config.json")),
+    storagePath(root, ["config.json"]).then(readJson),
   ]);
   const current = project ? local : user;
+  if (project && patch.permission !== undefined) {
+    const ceiling = mergeConfig(user).permission;
+    const requested = mergeConfig({ permission: patch.permission }).permission;
+    if (permissionStrength[requested] < permissionStrength[ceiling])
+      throw new Error(
+        `Project permission cannot weaken the user permission ${ceiling}. Change the user setting or use an explicit --permission override.`,
+      );
+  }
   const next: ConfigFile = { ...current, ...patch };
   if (patch.context !== undefined) next.context = { ...current.context, ...patch.context };
   if (patch.runLimits !== undefined) {
@@ -193,10 +225,32 @@ export async function patchConfig(
       throw new Error("runLimits must be an object");
     next.runLimits = { ...current.runLimits, ...patch.runLimits };
   }
-  const effective = project ? mergeConfig(user, next) : mergeConfig(next, local);
+  if (project) {
+    const personal = mergeConfig(user);
+    const taskCeiling = personal.context.taskTokens;
+    if (
+      taskCeiling !== undefined &&
+      patch.context &&
+      Object.hasOwn(patch.context, "taskTokens") &&
+      (patch.context.taskTokens === null ||
+        patch.context.taskTokens === undefined ||
+        patch.context.taskTokens > taskCeiling)
+    )
+      throw new Error(
+        `Project context.taskTokens cannot weaken the user token limit ${taskCeiling}. Update or clear the user setting first.`,
+      );
+    for (const [name, value] of Object.entries(patch.runLimits ?? {})) {
+      const ceiling = personal.runLimits?.[name as keyof RunLimits];
+      if (ceiling !== undefined && value > ceiling)
+        throw new Error(
+          `Project runLimits.${name} cannot exceed the user limit ${ceiling}. Update the user setting first.`,
+        );
+    }
+  }
+  const effective = project ? mergeScopedConfig(user, next) : mergeScopedConfig(next, local);
   if (!project) mergeConfig(next);
   await writeJsonAtomic(
-    project ? join(root, ".vcli", "config.json") : join(configHome(), "config.json"),
+    project ? await storagePath(root, ["config.json"]) : join(configHome(), "config.json"),
     next,
   );
   return effective;
