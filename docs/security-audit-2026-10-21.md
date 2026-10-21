@@ -6,9 +6,10 @@ independent areas, implemented offline reproductions and fixes, and reviewed
 selected changes from another owner. Work is isolated on
 `codex/security-audit-2026-10-21`, starting at `d257667`.
 
-Permission gates remain application controls. Authorized Bash, hooks and MCP
-programs run with the user's OS rights. This release does not provide filesystem,
-network or deliberately detached process isolation at OS level.
+The follow-up adds mandatory native process isolation and descriptor-rooted I/O.
+Three same-model subagents implemented independent boundaries, adversarial tests
+and cross-reviews. Shell/hooks/stdio MCP never receive the live writable project,
+provider environment or network access. A missing native boundary refuses startup.
 
 ## Scope and approach
 
@@ -115,13 +116,31 @@ remain usable through safe alias lookup.
 
 ## Verification
 
-Reverified baseline: 358 tests and 2,075 assertions. Final macOS arm64 suite:
+Reverified baseline: 358 tests and 2,075 assertions. Initial audit macOS arm64 suite:
 **456 tests, 0 failures, 2,568 assertions across 50 files**. Frozen installation,
 formatting, ESLint, strict TypeScript, architecture drift checks, native build,
 standalone smoke outside the checkout and the regenerated offline benchmark pass.
 Smoke covers source/compiled PTY flows, graphics, worker/font, restoration,
 permissions, cancellation, terminal cleanup and capped descriptors. No paid model
-API was used. Dependency audit retains the Braces exception below.
+API was used. These counts describe the first audit.
+
+The native-isolation revision was then verified on Bun 1.3.13:
+
+| Platform    | Passed | Platform skips | Failed | Assertions | Files |
+| ----------- | -----: | -------------: | -----: | ---------: | ----: |
+| macOS arm64 |    522 |              2 |      0 |      2,970 |    58 |
+| Linux arm64 |    520 |              4 |      0 |      3,350 |    58 |
+
+The macOS skips exercise Linux-only descriptor ownership; Linux skips exercise
+the macOS native supervisor/direct Python adapter. Linux ran as an unprivileged
+user in a dedicated container with an init reaper; it used sanitized source copies
+without personal configuration, credentials or sessions. The outer test container
+allowed nested namespaces; the actual subprocess boundary still used bubblewrap,
+seccomp and a fresh unprivileged user namespace.
+Both platforms pass frozen installation, formatting, lint, strict TypeScript,
+architecture checks, native build and standalone smoke. After the Linux full suite
+and smoke the test harness retained zero zombies and zero live payload processes.
+WSL and Linux x64 still require their own verification; CI includes Linux x64.
 
 ## Dependencies
 
@@ -133,28 +152,107 @@ No vcli call to Seroval's untrusted JSON deserializers was found. This is
 dependency risk reduction, not a reproduced vcli remote-code-execution claim.
 Bun/TypeScript pins and the license preservation workflow remain intact.
 
-The remaining [Braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
-affects development tooling through typescript-eslint → fast-glob → micromatch.
-The published advisory lists no patched version; the registry still offers 3.0.3.
-No runtime import was found. bun audit still exits nonzero for this development
-dependency. An unverified fork or suppressed advisory would not establish a fix.
+The [Braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) has no
+published patched Braces release. Updating the pinned development dependency
+`typescript-eslint` to 8.72.0 removes fast-glob/micromatch/Braces from the dependency
+graph. `bun audit` now reports no vulnerabilities. Bun 1.3.13 and TypeScript 5.9.3
+remain pinned; the build preserves dependency licenses.
+
+## Native isolation and filesystem follow-up
+
+- macOS uses deny-default Seatbelt. A native supervisor creates an immutable child
+  process group before confinement. Kernel filters deny ptrace, sockets, setsid,
+  setpgid and posix_spawn; an actual EPERM probe must succeed before every launch.
+  The supervisor watches the owner/leader with kqueue, kills descendants and drains
+  them before reporting an outcome. The compiled binary embeds its helper; source
+  use compiles only bundled C with the fixed system compiler.
+- Linux/WSL uses mandatory bubblewrap with fresh user/mount/PID/network/IPC
+  namespaces, patched non-setuid bubblewrap 0.12 or newer, dropped capabilities,
+  nested-user-namespace prohibition and an
+  architecture-checked seccomp program. Socket creation, ptrace, namespace changes
+  and io_uring are denied. Root-owned prlimit applies resource ceilings. Mounts
+  use trusted system paths and parent-created private copies; host directory FDs
+  never cross Bun’s subprocess boundary. A fixed trusted shell opens the consumed
+  seccomp FD before exec. This avoids a reproduced Bun 1.3.13 numeric-stdio FD
+  ownership bug; 100 actual Linux launches retained an exact 14 → 14 FD count.
+  Unsupported features and root execution fail closed.
+- Shell, hooks, Git/ripgrep and stdio MCP use private bounded source copies. Common
+  credentials/state names, links, special files and generated trees are omitted.
+  Installed MCP packages are separately copied read-only. A fresh environment/HOME
+  removes provider credentials, proxies and interpreter startup injection.
+- Package placeholders no longer expand ambient environment variables. Previously
+  vendor metadata could copy a provider key into a stdio argument/environment or
+  an HTTP URL/header before confinement. Unknown references disable the server;
+  vendor defaults remain static literals. Synthetic-secret tests cover every
+  supported field, including portable HTTP configuration and diagnostics.
+- Raw MCP configuration now shares strict transport/URL validation with plugin
+  imports and the connection manager. Bun accepts file URLs in fetch; unchecked
+  raw settings could therefore make the HTTP adapter read an outside fixture.
+  Only HTTP(S) is accepted, plaintext is loopback-only, and credentials/fragments
+  in URLs are rejected before connection. Validated grants are copied. Two-origin
+  redirect/auth-challenge regressions confirm that RPC bodies and synthetic custom
+  credential headers never reach a second origin.
+- Runtime discovery ignores project paths, dependency shims, private paths and
+  relative PATH entries before and after canonicalization. Previously bun run's
+  prepended node_modules/.bin could turn a project symlink into an outside runtime
+  read grant. Fresh-process regressions cover that path and external aliases;
+  only the running host executable retains its explicit trusted identity.
+- The host validates every changed path/content/mode and current policy before
+  importing results. Private/generated writes are discarded; links and unexpected
+  children in removed directories reject import. MCP mutations made between
+  authorized requests reject the next request. Cancellation discards staged work.
+- Files, instructions/memory, checkpoints, journal capture/rollback, tasks/plans,
+  configuration, artifacts and architecture/compiler/package metadata now use
+  pinned-directory openat/mkdirat/renameat/linkat/unlinkat operations, no-follow
+  regular-file checks and new-inode atomic writes. Project root identities remain
+  bound across independent opens. Package intake no longer races fs.cp against
+  untrusted source links.
+- Architecture scanning preserves the original launch root in that identity
+  binding. A regression first scans an approved tree, replaces its root with a
+  link to an outside fixture, and verifies that subsequent scans/design access
+  fail without reading source or creating an outside index.
+- SQLite no longer opens workspace database/sidecar pathnames. It runs in memory
+  and atomically serializes acknowledged events/snapshots through the rooted host
+  capability, with one OS writer lock and read-only history snapshots. The database
+  cap is 128 MiB. Nonempty legacy recovery sidecars require explicit trusted SQLite
+  checkpoint/recovery; they are preserved, never silently discarded.
+- Linux PTY stress reproduced interrupted filesystem I/O. Repeatable reads,
+  writes, stat, mode checks and fsync handle bounded EINTR retries. Existing
+  directories are opened before any mkdirat; interrupted creation is resolved by
+  inspecting its actual result. Rename, link, unlink and close are never blindly
+  replayed. Deterministic fault injection and 20 consecutive source-chat runs
+  exercise the correction.
+
+The filesystem design follows [openat directory capabilities](https://man7.org/linux/man-pages/man2/openat.2.html)
+and [atomic rename semantics](https://man7.org/linux/man-pages/man2/rename.2.html).
+Process controls were checked against [Chromium's macOS sandbox documentation](https://chromium.googlesource.com/chromium/src/sandbox/+/refs/heads/main/mac/),
+[Apple syscall definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/syscalls.master),
+[bubblewrap's implementation](https://github.com/containers/bubblewrap) and
+[Linux seccomp guidance](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html).
+SQLite migration follows its [deserialize requirements](https://www.sqlite.org/c3ref/deserialize.html).
 
 ## Remaining boundaries
 
-Authorized shell commands, hooks and MCP servers can access files and network
-destinations with user rights. An allowlisted interpreter/test can execute
-project-controlled code; syntax/path checks do not constrain its internal access.
-PATH, runtimes and installed executables remain trusted. Deliberately creating a
-new POSIX session can escape process-group cleanup. Stronger containment requires
-kernel/container/sandbox enforcement.
+The boundary protects the host from untrusted agent subprocesses and repository
+content. Host runtimes, installed system executables, the kernel and explicit
+interactive plugin/config commands remain trusted. Filesystem capabilities pin
+approved directory identities: they do not provide a hash/namespace compare-and-
+swap against arbitrary same-UID host malware moving those directories, process
+injection, or a compromised kernel. Separate users/VMs are needed for that threat.
 
-Static path guards do not eliminate races with a hostile process replacing parent
-directories between checks and operations. Default state remains inside the
-project and can be altered by shell running with user rights. External private
-state and policy preserve application controls; they do not isolate the shell.
+Process limits bound descriptors, CPU, process count and individual file size;
+staging bounds capture/import size. They are not aggregate memory/disk quotas.
+Availability against deliberate host resource exhaustion needs an outer quota or
+VM/container boundary. This limitation is explicit and must not be represented
+as fully closed host availability risk.
+
+macOS forbids nested posix_spawn (including some Node/Bun subprocess APIs); normal
+Bash fork/exec remains supported. Native child networking and dependency downloads
+are unavailable. Generated dependency/build trees and links are not copied into
+source snapshots. Explicit HTTP MCP endpoints remain separate host network grants.
 
 Project instructions, hooks, packages, tool descriptions and responses can carry
 prompt injection. Host authorization limits effects but cannot prove semantic
 user intent. Files readable under the chosen policy may contain secrets. A
 successful verification tool proves its recorded result, not natural-language
-completion criteria. Linux/WSL and live provider availability need separate runs.
+completion criteria. WSL and live provider availability need separate runs.

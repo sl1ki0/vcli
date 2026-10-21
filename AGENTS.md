@@ -41,6 +41,12 @@
 - Optional external policy: deny-first exact simple Bash, canonical paths/cwd inside
   project, reject traversal/links; inherit in explorers/hooks/lazy startup. Reads
   with hooks/startup are charged and approved as compound effects.
+- Shell/hooks/stdio MCP require Seatbelt or patched non-setuid bubblewrap; fail
+  closed. Use bounded private copies, fresh environments, no network/live mounts;
+  drain descendants before validated imports. Runtime PATH cannot grant project files.
+- Host I/O uses pinned directory descriptors, no-follow regular files and atomic
+  replacement. Bind original roots before canonicalization. SQLite runs in memory
+  with atomic durable snapshots and one OS writer lock; never discard recovery sidecars.
 - Separate model text/artifacts/UI. Balanced: prompt32k/map4k/schemas4k/result3k/
   output8k. Count instructions/output reserve within window (unknown 32,768).
 - Preserve task ledger and human chat; prune complete tool groups. Session.chat =
@@ -90,7 +96,8 @@
 - Use rg and meaningful tests. bun install --frozen-lockfile; bun run format:check;
   bun run lint; bun run check; bun test; bun run dev architecture check; bun run
   build; bun run smoke. Source+compiled PTY outside checkout: cleanup, worker/font,
-  graphics, FD256. Local 2026-10-21: 456 tests / 2,568 assertions; reverify changes.
+  graphics, FD256. Local 2026-10-21: macOS 522 pass/2 skip/2,970 assertions;
+  Linux 520 pass/4 skip/3,350 assertions; reverify changes.
 - bun run benchmark --write docs/benchmarks.md: offline estimates, no paid-model
   savings/completion claims. Fixtures use no paid APIs. tests/run-acceptance.test.ts:
   ordinary harness, unchanged Python tests, Bash, three verified dependent tasks,

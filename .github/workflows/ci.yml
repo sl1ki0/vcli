@@ -14,6 +14,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
+      - name: Install mandatory Linux sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config libcap-dev gcc curl xz-utils
+          curl -fsSLo "$RUNNER_TEMP/bubblewrap.tar.xz" https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz
+          printf '4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765  %s\n' "$RUNNER_TEMP/bubblewrap.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/bubblewrap.tar.xz" -C "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bubblewrap-build" "$RUNNER_TEMP/bubblewrap-0.13.0" --prefix=/usr -Dtests=false -Dman=disabled -Dselinux=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
+          ninja -C "$RUNNER_TEMP/bubblewrap-build"
+          sudo install -m 0755 "$RUNNER_TEMP/bubblewrap-build/bwrap" /usr/bin/bwrap
+          # Hosted Ubuntu runners restrict unprivileged namespaces via AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install ripgrep
         run: |
           if ! command -v rg >/dev/null; then

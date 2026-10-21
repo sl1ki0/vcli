@@ -95,10 +95,12 @@ endpoint-specific key through setup. Keyless compatible connections are limited
 to `localhost`, `127.0.0.1` and `::1`. A remote authless service needs an intentional
 endpoint-specific placeholder key.
 
-**YOLO is the default:** the agent uses your filesystem and network privileges
-without approval prompts. Change `permission` to `ask` or `read-only`, or pass
-`--permission` for one run. Ask mode denies execution when no interactive approval
-channel is available. Permission controls are not a filesystem sandbox.
+**YOLO is the default:** allowed actions proceed without approval prompts. Change
+`permission` to `ask` or `read-only`, or pass `--permission` for one run. Ask mode
+denies execution when no interactive approval channel is available. Shell, hooks
+and stdio MCP also require the native OS sandbox and run on disposable project
+snapshots with network/private-file access denied. See
+[platform requirements and compatibility](docs/runtime.md#optional-external-policy).
 Project settings may tighten user permissions and explicit spending ceilings;
 they cannot weaken them. Explicit `--permission` overrides apply to the current
 launch. See the [security audit](docs/security-audit-2026-10-21.md) for tested
