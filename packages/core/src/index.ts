@@ -8,3 +8,4 @@ export * from "./tool-history.ts";
 export * from "./delegation-budget.ts";
 export * from "./run-state.ts";
 export * from "./run-plan.ts";
+export * from "./host-filesystem.ts";
