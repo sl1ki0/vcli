@@ -49,7 +49,9 @@
   tools interrupted, never replay. Preserve opaque continuations; clear on provider
   switch. SQLite snapshots/event watermarks prevent duplicate stream replay.
 - Provider/endpoint credentials separate from project settings; mask keys.
-  OpenRouter never borrows OpenAI keys. Users explicitly select models.
+  Vendor env keys stay canonical; compatible env keys bind a URL, keyless is
+  loopback-only. Users select models. Projects cannot weaken user permissions
+  or explicit spending ceilings.
 
 ## Workflows and terminal
 
@@ -76,6 +78,8 @@
   workspace imports; compiled clients outside checkout require it.
 - Graph -> LayoutScene -> SVG -> PNG -> OpenTUI image; shared render/hit geometry,
   independent repaint, tree fallback, separate graph views.
+  Strict scans filter before source/compiler reads and avoid full-project caches.
+  MCP stdio startup executes once; unsafe external schemas are unsupported.
 - Physical Ctrl+C and /stop cancel; /exit drains. F2 /chat, /split, F3 architecture.
   Local navigation/settings/history/plans make no model calls. One /help/suggestion
   catalog: arrows select, Tab completes, Enter completes partial/submits exact,
@@ -86,7 +90,7 @@
 - Use rg and meaningful tests. bun install --frozen-lockfile; bun run format:check;
   bun run lint; bun run check; bun test; bun run dev architecture check; bun run
   build; bun run smoke. Source+compiled PTY outside checkout: cleanup, worker/font,
-  graphics, FD256. Local 2026-10-20: 358 tests / 2,075 assertions; reverify changes.
+  graphics, FD256. Local 2026-10-21: 456 tests / 2,568 assertions; reverify changes.
 - bun run benchmark --write docs/benchmarks.md: offline estimates, no paid-model
   savings/completion claims. Fixtures use no paid APIs. tests/run-acceptance.test.ts:
   ordinary harness, unchanged Python tests, Bash, three verified dependent tasks,

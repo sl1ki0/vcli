@@ -26,6 +26,28 @@ passed on macOS and Linux with all 204 tests, native builds, the existing termin
 smoke checks, and the new packaged plan/resume/build/task/checkpoint workflow.
 Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfully.
 
+## Security audit, 2026-10-21
+
+The local macOS arm64 security revision passes **456 tests with 2,568 assertions
+across 50 files**, compared with the reverified 358-test/2,075-assertion baseline.
+Frozen installation, Prettier, ESLint, strict TypeScript and architecture drift
+checks pass. Native build and standalone smoke pass outside the checkout,
+including source/compiled PTY flows, worker/font, graphics, session restoration,
+approval decisions, cancellation, terminal cleanup and capped file descriptors.
+The offline benchmark was regenerated without paid model calls.
+
+Regression fixtures cover credential destination binding, project permission and
+spending ceilings, case aliases, denied architecture source in parent/explorer
+context, read-tool subprocess injection, links/FIFOs, state permissions,
+checkpoint policy, uncertain effects, process lifetime, output/usage reservations,
+task identity, MCP schema CPU restrictions, single stdio startup and bounded
+MCP/provider response decoding. See the [audit findings and limits](security-audit-2026-10-21.md).
+
+Seroval is pinned to 1.6.3 through a root override. `bun audit --json` still reports
+the unpatched Braces development-tooling advisory; the audit report records its
+dependency path and scope. OS sandboxing, Linux/WSL verification and live provider
+availability are not established by these macOS/offline results.
+
 ## Ordinary runtime and command revision, 2026-10-20
 
 `tests/run-acceptance.test.ts` exercises the production harness, compatible SDK

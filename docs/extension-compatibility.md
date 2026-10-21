@@ -95,6 +95,22 @@ Selected tools still pass normal argument validation, permissions and durable
 execution recording. Cancelled or uncertain effects are never automatically
 replayed. Package installation is a snapshot copy; dependencies are not installed.
 
+Stdio selects legacy negotiation so each configured program starts once;
+modern-only stdio requires future explicit protocol selection. HTTP retains
+modern/legacy negotiation. Decoded MCP HTTP bodies and aggregated discovery are
+capped at 8 MiB and discovery uses at most 64 pages. Package JSON/skill bodies are
+limited to 1 MiB; frontmatter reads use a 16 KiB prefix. Skill strings must resolve
+through the catalog, so model arguments cannot supply filesystem paths.
+
+External schemas are limited to 64 KiB, depth 32 and 1,024 expanded nodes. Only the
+supported draft-07 subset is accepted, with local acyclic references. Regex/format
+keywords, external/dynamic/cyclic references and unsupported dialect constraints
+produce diagnostics. Validators have isolated schema registries; malformed tools
+cannot poison valid siblings. Startup budgets count configured connections; a
+server's own subprocesses still need OS isolation for containment.
+All discovered MCP operations, including resource listing and reads, retain
+external-action permissions and effect charges when the permission mode changes.
+
 ## Remaining work
 
 - Archive and npm acquisition, standalone HTTP catalog URLs, registry search and
