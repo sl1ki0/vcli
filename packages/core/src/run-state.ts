@@ -9,6 +9,8 @@ export interface RunLimits {
 export interface RunCall {
   call: ToolCall;
   signature: string;
+  /** null records an omitted request task before the host attaches plan attribution. */
+  requestedTaskId?: string | null;
   kind: ToolKind;
   sideEffects: number;
   retrySafe: boolean;
@@ -100,11 +102,23 @@ function canonical(value: unknown): unknown {
   return value;
 }
 export function callSignature(call: ToolCall): string {
-  return JSON.stringify(canonical({ name: call.name, arguments: call.arguments }));
+  return JSON.stringify(
+    canonical({ name: call.name, arguments: call.arguments, taskId: call.taskId }),
+  );
 }
 export function savedCall(state: RunState, call: ToolCall): RunCall | undefined {
   const saved = Object.hasOwn(state.calls, call.id) ? state.calls[call.id] : undefined;
-  if (saved && saved.signature !== callSignature(call)) throw new ToolProtocolError(call.id);
+  if (saved) {
+    const legacy = saved.requestedTaskId === undefined;
+    // Legacy snapshots did not distinguish requested tasks from host attribution.
+    // Preserve omitted-task replay, but never accept a different explicit task.
+    const signature = callSignature(legacy ? { ...call, taskId: undefined } : call);
+    if (
+      saved.signature !== signature ||
+      (legacy && call.taskId !== undefined && call.taskId !== saved.call.taskId)
+    )
+      throw new ToolProtocolError(call.id);
+  }
   return saved;
 }
 function requireCapacity(state: RunState, resource: keyof RunLimits, amount: number): void {
@@ -122,9 +136,13 @@ export function reserveRunBatch(
     string,
     { call: ToolCall; kind: ToolKind; retrySafe: boolean; sideEffects: number }
   >();
+  const retries = new Map<string, RunCall>();
+  const outputs = new Set<string>();
   for (const call of calls) {
     if (!call.id || typeof call.id !== "string")
       throw new Error("Tool protocol error: missing call id.");
+    if (call.taskId !== undefined && (typeof call.taskId !== "string" || !call.taskId))
+      throw new Error("Tool protocol error: task id must be a nonempty string when supplied.");
     const saved = savedCall(state, call);
     const duplicate = fresh.get(call.id);
     if (duplicate && callSignature(duplicate.call) !== callSignature(call))
@@ -136,26 +154,33 @@ export function reserveRunBatch(
         throw new Error("Tool side-effect cost must be a nonnegative safe integer.");
       fresh.set(call.id, { call, ...descriptor, sideEffects });
     }
+    if (saved?.retryRequested) retries.set(call.id, saved);
+    if (
+      !saved ||
+      ((saved.status === "reserved" || saved.status === "approval") &&
+        saved.resultAllowance === undefined &&
+        !saved.forcedResult)
+    )
+      outputs.add(call.id);
   }
-  requireCapacity(state, "toolCalls", fresh.size);
-  requireCapacity(
-    state,
-    "sideEffects",
-    [...fresh.values()].reduce((sum, entry) => sum + entry.sideEffects, 0),
-  );
-  if (fresh.size && state.counters.resultBytes >= state.limits.resultBytes)
-    throw new RunBudgetError("resultBytes");
-  state.counters.toolCalls += fresh.size;
-  state.counters.sideEffects += [...fresh.values()].reduce(
+  requireCapacity(state, "toolCalls", fresh.size + retries.size);
+  const sideEffects = [...fresh.values(), ...retries.values()].reduce(
     (sum, entry) => sum + entry.sideEffects,
     0,
   );
+  requireCapacity(state, "sideEffects", sideEffects);
+  // Every unknown result needs at least one byte. Reserve the whole batch before
+  // any call can consume output capacity or cross an effect boundary.
+  requireCapacity(state, "resultBytes", outputs.size);
+  state.counters.toolCalls += fresh.size + retries.size;
+  state.counters.sideEffects += sideEffects;
   for (const [id, entry] of fresh)
     Object.defineProperty(state.calls, id, {
       value: {
         ...entry,
         call: structuredClone(entry.call),
         signature: callSignature(entry.call),
+        requestedTaskId: entry.call.taskId ?? null,
         status: "reserved",
         attempts: 0,
       },
@@ -163,6 +188,9 @@ export function reserveRunBatch(
       configurable: true,
       enumerable: true,
     });
+  for (const entry of retries.values()) entry.retryRequested = undefined;
+  for (const id of outputs) state.calls[id]!.resultAllowance = 1;
+  state.counters.resultBytes += outputs.size;
   state.pending = [...new Set(calls.map((call) => call.id))];
 }
 export function reserveModelRequest(state: RunState): void {
@@ -170,21 +198,27 @@ export function reserveModelRequest(state: RunState): void {
   state.counters.modelRequests++;
 }
 /** Reserve unknown output conservatively. Failed/uncertain attempts keep their charge. */
+export function reserveRunOutput(state: RunState, entry: RunCall, maximumBytes?: number): number {
+  const reserved = entry.resultAllowance ?? 0;
+  const available = state.limits.resultBytes - state.counters.resultBytes + reserved;
+  const allowance = Math.min(available, maximumBytes ?? available);
+  if (allowance <= 0) throw new RunBudgetError("resultBytes");
+  state.counters.resultBytes += allowance - reserved;
+  entry.resultAllowance = allowance;
+  return allowance;
+}
+/** Reserve unknown output conservatively. Failed/uncertain attempts keep their charge. */
 export function startRunCall(state: RunState, entry: RunCall, maximumBytes?: number): number {
   if (entry.retryRequested) {
     requireCapacity(state, "toolCalls", 1);
     requireCapacity(state, "sideEffects", entry.sideEffects);
   }
-  const available = state.limits.resultBytes - state.counters.resultBytes;
-  const allowance = Math.min(available, maximumBytes ?? available);
-  if (allowance <= 0) throw new RunBudgetError("resultBytes");
+  const allowance = reserveRunOutput(state, entry, maximumBytes);
   if (entry.retryRequested) {
     state.counters.toolCalls++;
     state.counters.sideEffects += entry.sideEffects;
     entry.retryRequested = undefined;
   }
-  state.counters.resultBytes += allowance;
-  entry.resultAllowance = allowance;
   entry.status = "started";
   entry.attempts++;
   return allowance;

@@ -16,6 +16,7 @@ import {
   capToolResult,
   PendingApprovalError,
   reserveRunBatch,
+  reserveRunOutput,
   RunBudgetError,
   savedCall,
   settleRunOutput,
@@ -32,6 +33,8 @@ interface ToolExecution {
   blocked?: boolean;
   interrupted?: boolean;
   replay?: boolean;
+  /** A throwing executor may have produced output/effects that were never returned. */
+  retainOutputReservation?: boolean;
 }
 
 export class ToolExecutionController {
@@ -72,13 +75,26 @@ export class ToolExecutionController {
       kind: tools.get(call.name)?.kind,
       arguments: call.arguments,
     });
+    const outputAllowance = (maximum = maximumBytes) =>
+      reserveRunOutput(
+        state,
+        entry,
+        Math.min(
+          maximum ?? Number.MAX_SAFE_INTEGER,
+          this.options.resultBytesPerCall ?? 16 * 1024 * 1024,
+        ),
+      );
     const blockedResult = (): ToolExecution => ({
       call,
-      result: { text: session.invalidToolRequests!.blocked!.reason, isError: true },
+      result: capToolResult(
+        { text: session.invalidToolRequests!.blocked!.reason, isError: true },
+        outputAllowance(),
+      ),
       blocked: true,
     });
     if (session.invalidToolRequests?.blocked) return blockedResult();
     let effectFinished = false;
+    let executionStarted = false;
     try {
       const tool = tools.validate(call);
       if (tool.kind !== entry.kind)
@@ -93,7 +109,7 @@ export class ToolExecutionController {
         session.mode !== "plan" &&
         !["plan_publish", "plan_task"].includes(tool.name)
       ) {
-        const task = startPlanTask(session.plan, call.taskId);
+        const task = startPlanTask(session.plan, entry.call.taskId ?? call.taskId);
         call.taskId = task.id;
         entry.call.taskId = task.id;
         context.taskId = task.id;
@@ -149,6 +165,7 @@ export class ToolExecutionController {
         attempt: entry.attempts,
       });
       this.options.permissions.assertAllowed(approvalTool);
+      executionStarted = true;
       const result = await tools.executeWith(call, context, (execute) =>
         this.options.executeTool ? this.options.executeTool(call, context, execute) : execute(),
       );
@@ -165,6 +182,19 @@ export class ToolExecutionController {
       )
         throw error;
       let text = error instanceof Error ? error.message : String(error);
+      if (executionStarted && entry.sideEffects > 0)
+        return {
+          call,
+          result: capToolResult(
+            {
+              text: `${text}\nTool execution threw after its effect boundary. Outcome uncertain; inspect and explicitly resolve this action before continuing. Do not replay automatically.`,
+              isError: true,
+              outcomeUncertain: true,
+            },
+            entry.resultAllowance!,
+          ),
+          retainOutputReservation: true,
+        };
       let blocked = false;
       if (error instanceof ToolValidationError) {
         text = recordInvalidToolRequest(session, call.name, error);
@@ -173,11 +203,7 @@ export class ToolExecutionController {
       }
       return {
         call,
-        result: capToolResult(
-          { text, isError: true },
-          entry.resultAllowance ??
-            Math.max(0, state.limits.resultBytes - state.counters.resultBytes),
-        ),
+        result: capToolResult({ text, isError: true }, outputAllowance()),
         blocked,
       };
     }
@@ -185,7 +211,7 @@ export class ToolExecutionController {
 
   async recordResult(
     session: Session,
-    { call, result, blocked, interrupted, replay }: ToolExecution,
+    { call, result, blocked, interrupted, replay, retainOutputReservation }: ToolExecution,
   ): Promise<void> {
     const { store } = this.options;
     const state = session.runState!;
@@ -223,7 +249,8 @@ export class ToolExecutionController {
     ];
     if (call.name === "shell_run") session.ledger.verification.push(boundText(result.text, 400));
     if (entry && !interrupted && !replay) {
-      if (!entry.forcedResult) settleRunOutput(state, entry, toolResultBytes(result));
+      if (!entry.forcedResult && !retainOutputReservation)
+        settleRunOutput(state, entry, toolResultBytes(result));
       entry.status = result.outcomeUncertain ? "uncertain" : "complete";
       entry.result = {
         output,
@@ -296,7 +323,10 @@ export class ToolExecutionController {
         // Drain every child before propagating cancellation: their usage and mutation
         // records must be durable before the host closes the session store.
         const maximumBytes = Math.floor(
-          (state.limits.resultBytes - state.counters.resultBytes) / reads.length,
+          (state.limits.resultBytes -
+            state.counters.resultBytes +
+            reads.reduce((sum, call) => sum + (state.calls[call.id]!.resultAllowance ?? 0), 0)) /
+            reads.length,
         );
         const results = await Promise.allSettled(reads.map((call) => execute(call, maximumBytes)));
         for (const result of results)

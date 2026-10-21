@@ -5,17 +5,20 @@ const toolEvents = new Set(["tool-request", "tool-start", "tool-end"]);
 const sensitive =
   /^(?:.*[_-])?(?:api[_-]?key|authorization|password|secret|access[_-]?token|refresh[_-]?token|token|headers|env)$/i;
 
-/** Escape terminal controls; tool output is literal data, never terminal instructions. */
+/** Preserve text layout while making terminal instructions and direction overrides literal. */
+export function escapeTerminalText(value: string): string {
+  return value.replace(
+    /[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/** Tool history additionally masks recognizable credential assignments. */
 export function displayToolText(value: string): string {
-  return value
-    .replace(
-      /[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g,
-      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    )
-    .replace(
-      /\b((?:[a-z0-9_]*(?:api_key|access_token|refresh_token|password|secret)|authorization)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi,
-      "$1[redacted]",
-    );
+  return escapeTerminalText(value).replace(
+    /\b((?:[a-z0-9_]*(?:api_key|access_token|refresh_token|password|secret)|authorization)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi,
+    "$1[redacted]",
+  );
 }
 
 function argumentText(value: unknown, depth = 0): string {

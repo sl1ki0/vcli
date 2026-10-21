@@ -21,7 +21,7 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
-  /** Assigned task while executing an approved structured plan. */
+  /** Requested task, or host attribution on a saved execution; RunCall retains request identity. */
   taskId?: string;
 }
 export interface Message {
@@ -105,8 +105,12 @@ export interface Drift {
   message: string;
   evidence?: Evidence[];
 }
+export interface ArchitectureScanScope {
+  allowFile(path: string): Promise<boolean>;
+  allowDirectory(path: string): Promise<boolean>;
+}
 export interface ArchitectureService {
-  scan(root: string): Promise<ArchitectureGraph>;
+  scan(root: string, scope?: ArchitectureScanScope): Promise<ArchitectureGraph>;
   readDesign(root: string): Promise<ArchitectureDesign>;
   writeDesign(root: string, design: ArchitectureDesign): Promise<void>;
   intendedGraph(root: string, design: ArchitectureDesign): ArchitectureGraph;

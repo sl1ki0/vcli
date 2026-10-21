@@ -211,7 +211,12 @@ export class AgentRuntime {
         return session;
       }
       if (session.runState!.pending.length) {
-        const pending = session.runState!.pending.map((id) => session.runState!.calls[id]!.call);
+        const pending = session.runState!.pending.map((id) => {
+          const entry = session.runState!.calls[id]!;
+          return entry.requestedTaskId === undefined
+            ? entry.call
+            : { ...entry.call, taskId: entry.requestedTaskId ?? undefined };
+        });
         if (await this.toolExecution.executeBatch(session, pending, signal))
           graph = await architecture.scan(root);
       }
@@ -432,7 +437,14 @@ export class AgentRuntime {
           await this.emit("reasoning", { messageId: response.id, text: event.text });
         }
         if (event.type === "tool-call") calls.push(event.call);
-        if (event.type === "usage") usage = event.usage;
+        if (event.type === "usage") {
+          const { input, output, cached } = event.usage;
+          usage = [input, output, cached, input + output].every(
+            (count) => Number.isSafeInteger(count) && count >= 0,
+          )
+            ? { input, output, cached }
+            : { input: 0, output: 0, cached: 0 };
+        }
         if (event.type === "done") providerData = event.providerData;
       }
       signal.throwIfAborted();
@@ -445,7 +457,12 @@ export class AgentRuntime {
     session.usage.input += usage.input;
     session.usage.output += usage.output;
     session.usage.cached += usage.cached;
-    if (usage.input + usage.output > 0) session.budgetSpent = spent + usage.input + usage.output;
+    const measured = usage.input + usage.output;
+    const producedOutput = Boolean(response.text || response.reasoning || calls.length);
+    // Missing components normalize to zero at provider boundaries. A nonempty
+    // request/response cannot be free: retain its reservation for partial usage.
+    const completeUsage = usage.input > 0 && (usage.output > 0 || !producedOutput);
+    session.budgetSpent = spent + (completeUsage ? measured : Math.max(reservation, measured));
     const assistant: Message = {
       role: "assistant",
       text: response.text,

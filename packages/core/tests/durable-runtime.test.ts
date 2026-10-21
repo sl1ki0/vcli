@@ -149,7 +149,7 @@ describe("durable execution in the regular runtime", () => {
     expect(f.counts.requests).toBe(1);
     expect(resumed.runState?.limits.modelRequests).toBe(1);
   });
-  for (const limit of ["toolCalls", "sideEffects"] as const)
+  for (const limit of ["toolCalls", "sideEffects", "resultBytes"] as const)
     test(`${limit} preflights a whole model batch before any effect`, async () => {
       const f = fixture([[call("a"), call("b")]]);
       f.options.runLimits = { [limit]: 1 };
@@ -158,6 +158,7 @@ describe("durable execution in the regular runtime", () => {
       expect(f.effects).toHaveLength(0);
       expect(run.runState?.counters.toolCalls).toBe(0);
       expect(run.runState?.counters.sideEffects).toBe(0);
+      expect(run.runState?.counters.resultBytes).toBe(0);
       expect(f.store.events.filter((event) => event.type === "tool-start")).toHaveLength(0);
     });
   test("hooks and lazy external startup cannot hide side effects behind a read tool", async () => {
@@ -203,6 +204,31 @@ describe("durable execution in the regular runtime", () => {
     expect(run.status).toBe("budget");
     expect(run.runState?.counters.resultBytes).toBe(64);
   });
+  for (const kind of ["read", "write"] as const)
+    test(`a large ${kind} result cannot consume the last byte reserved for its batch sibling`, async () => {
+      const f = fixture([[call("a", "large"), call("b", "large")]], kind);
+      const allowances: number[] = [];
+      f.tools.register({
+        name: "large",
+        kind,
+        description: "Bounded unknown output",
+        eager: true,
+        inputSchema: { type: "object" },
+        execute: async (_args, context) => {
+          allowances.push(context.resultBytes!);
+          return { text: "x".repeat(100) };
+        },
+      });
+      f.options.runLimits = { resultBytes: 2 };
+      const run = await new AgentRuntime(f.options).run("Work", f.signal);
+      expect(allowances).toEqual([1, 1]);
+      expect(run.status).toBe("complete");
+      expect(run.runState?.counters.resultBytes).toBe(2);
+      expect(run.runState?.pending).toEqual([]);
+      expect(
+        f.store.artifacts.every((output) => new TextEncoder().encode(output).length <= 1),
+      ).toBe(true);
+    });
   test("repeated identical call IDs execute once even in a parallel batch and resume", async () => {
     const f = fixture([[call("a", "read"), call("a", "read")], [call("a", "read")]], "read");
     const first = await new AgentRuntime(f.options).run("Read", f.signal);
@@ -233,6 +259,86 @@ describe("durable execution in the regular runtime", () => {
     expect(f.effects).toHaveLength(1);
     expect(f.store.snapshot?.runState?.counters.toolCalls).toBe(1);
   });
+  test("duplicate IDs with different explicitly requested tasks reject a batch before any effect", async () => {
+    const f = fixture([
+      [
+        { ...call("a"), taskId: "first" },
+        { ...call("a"), taskId: "second" },
+      ],
+    ]);
+    await expect(new AgentRuntime(f.options).run("Write", f.signal)).rejects.toThrow(
+      "protocol error",
+    );
+    expect(f.effects).toEqual([]);
+    expect(f.store.snapshot?.runState?.counters.toolCalls).toBe(0);
+  });
+  for (const legacy of [false, true])
+    test(`changed explicit task identity rejects reuse across ${legacy ? "legacy" : "current"} snapshots`, async () => {
+      const f = fixture([[{ ...call("a"), taskId: "first" }]]);
+      const run = await new AgentRuntime(f.options).run("Write", f.signal);
+      if (legacy) {
+        const entry = run.runState!.calls.a!;
+        delete entry.requestedTaskId;
+        const signature = JSON.parse(entry.signature);
+        delete signature.taskId;
+        entry.signature = JSON.stringify(signature);
+        await f.store.save(run);
+      }
+      const provider: ProviderAdapter = {
+        ...f.options.provider,
+        async *stream() {
+          yield { type: "tool-call", call: { ...call("a"), taskId: "second" } };
+          yield { type: "done" };
+        },
+      };
+      await expect(
+        new AgentRuntime({ ...f.options, provider }).run("", f.signal, run.id),
+      ).rejects.toThrow("protocol error");
+      expect(f.effects).toEqual(["write"]);
+      expect(f.store.snapshot?.runState?.counters.toolCalls).toBe(1);
+    });
+  for (const legacy of [false, true])
+    test(`automatic task attribution survives approval resume and duplicate replay for ${legacy ? "legacy" : "current"} snapshots`, async () => {
+      const f = fixture([[call("a")], [call("a")]]);
+      f.options.permissions = new PermissionGate("ask");
+      const prior = await f.store.create("/project", f.options.provider, "Write");
+      prior.mode = "build";
+      prior.plan = createRunPlan(
+        {
+          goal: "Write",
+          doneWhen: "Verified",
+          risks: [],
+          assumptions: [],
+          steps: [
+            {
+              id: "task",
+              description: "Write",
+              dependencies: [],
+              tools: ["write"],
+              doneWhen: "Verified",
+              verificationTool: "write",
+            },
+          ],
+        },
+        "build",
+      );
+      await f.store.save(prior);
+      const waiting = await new AgentRuntime(f.options).run("", f.signal, prior.id);
+      expect(waiting.status).toBe("awaiting-approval");
+      const entry = waiting.runState!.calls.a!;
+      expect(entry.call.taskId).toBe("task");
+      expect(entry.requestedTaskId).toBeNull();
+      if (legacy) delete entry.requestedTaskId;
+      await resolveRunApproval(waiting, "a", true, () => f.store.save(waiting));
+      const resumed = await new AgentRuntime(f.options).run("", f.signal, waiting.id);
+      expect(f.effects).toEqual(["write"]);
+      expect(resumed.runState?.calls.a?.status).toBe("complete");
+      expect(resumed.runState?.calls.a?.call.taskId).toBe("task");
+      expect(resumed.runState?.counters.toolCalls).toBe(1);
+      expect(resumed.plan?.steps[0]?.evidence).toEqual([
+        { callId: "a", tool: "write", succeeded: true, summary: "ok" },
+      ]);
+    });
   test("crash after read effect retains charged output, resumes uncertain and explicit retry is a new attempt", async () => {
     const f = fixture([[call("a", "read")]], "read");
     f.options.runLimits = { resultBytes: 100 };
@@ -262,6 +368,59 @@ describe("durable execution in the regular runtime", () => {
     expect(f.effects).toHaveLength(1);
     expect(retry.runState?.counters.resultBytes).toBe(100);
   });
+  test("an executor that mutates and throws blocks later effects and retains its unknown output charge", async () => {
+    const f = fixture([[call("a", "throws"), call("b")]]);
+    f.tools.register({
+      name: "throws",
+      kind: "write",
+      description: "Mutation with an unavailable response",
+      eager: true,
+      inputSchema: { type: "object" },
+      execute: async () => {
+        f.effects.push("mutation applied");
+        throw new Error("Connection lost after mutation");
+      },
+    });
+    f.options.runLimits = { resultBytes: 4096 };
+    f.options.resultBytesPerCall = 1024;
+    const run = await new AgentRuntime(f.options).run("Write", f.signal);
+    expect(run.status).toBe("uncertain");
+    expect(f.effects).toEqual(["mutation applied"]);
+    expect(run.runState?.calls.a?.status).toBe("uncertain");
+    expect(run.runState?.calls.b?.status).toBe("reserved");
+    expect(run.runState?.counters.resultBytes).toBe(1025); // Includes the pending call's byte.
+    expect(run.messages.find((message) => message.role === "tool")?.text).toContain(
+      "Connection lost after mutation",
+    );
+    expect(run.messages.find((message) => message.role === "tool")?.text).toContain(
+      "Outcome uncertain",
+    );
+    const resumed = await new AgentRuntime(f.options).run("", f.signal, run.id);
+    expect(resumed.status).toBe("uncertain");
+    expect(f.effects).toEqual(["mutation applied"]);
+    expect(f.counts.requests).toBe(1);
+    await expect(
+      resolveRunUncertainty(resumed, "a", "retry", { save: () => f.store.save(resumed) }),
+    ).rejects.toThrow("cannot be safely repeated");
+    await resolveRunUncertainty(resumed, "a", "fail", {
+      save: () => f.store.save(resumed),
+    });
+    const resolved = await new AgentRuntime(f.options).run("", f.signal, run.id);
+    expect(resolved.status).toBe("complete");
+    expect(f.effects).toEqual(["mutation applied", "write"]);
+    expect(resolved.runState?.counters.resultBytes).toBe(1026);
+  });
+  test("policy failures before the executor remain certain failures and do not block unrelated work", async () => {
+    const f = fixture([[call("a"), call("b")]]);
+    f.options.beforeTool = async (request) => {
+      if (request.id === "a") throw new Error("Path denied before execution");
+    };
+    const run = await new AgentRuntime(f.options).run("Write", f.signal);
+    expect(run.status).toBe("complete");
+    expect(run.runState?.calls.a?.status).toBe("complete");
+    expect(run.runState?.calls.a?.attempts).toBe(0);
+    expect(f.effects).toEqual(["write"]);
+  });
   test("an explicitly repeated safe read keeps the original call identity and adds a charged attempt", async () => {
     const f = fixture([[call("a", "read")]], "read");
     f.options.runLimits = { resultBytes: 100 };
@@ -288,6 +447,26 @@ describe("durable execution in the regular runtime", () => {
       sideEffects: 0,
       resultBytes: 34,
     });
+  });
+  test("multiple explicitly requested retries reserve the whole batch before repeating any read", async () => {
+    const f = fixture([[call("a", "read"), call("b", "read")]], "read");
+    f.options.runLimits = { toolCalls: 3, resultBytes: 1000 };
+    f.options.resultBytesPerCall = 32;
+    f.options.afterToolEffect = async () => {
+      throw new Error("Result persistence interrupted");
+    };
+    await expect(new AgentRuntime(f.options).run("Read", f.signal)).rejects.toThrow("interrupted");
+    const run = await f.store.get();
+    for (const id of ["a", "b"])
+      await resolveRunUncertainty(run!, id, "retry", { save: () => f.store.save(run!) });
+    f.options.afterToolEffect = undefined;
+    const resumed = await new AgentRuntime(f.options).run("", f.signal, "run");
+    expect(resumed.status).toBe("budget");
+    expect(f.effects).toHaveLength(2);
+    expect(resumed.runState?.counters.toolCalls).toBe(2);
+    expect(resumed.runState?.counters.resultBytes).toBe(64);
+    expect(resumed.runState?.calls.a?.retryRequested).toBe(true);
+    expect(resumed.runState?.calls.b?.retryRequested).toBe(true);
   });
   test("uncertain mutations require explicit fail/abort; retry is prohibited", async () => {
     const f = fixture([[call("a")]]);

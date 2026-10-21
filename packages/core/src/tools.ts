@@ -49,7 +49,9 @@ export class ToolRegistry {
   private readonly ajv = new Ajv({ strict: false, allErrors: true });
   register(tool: ToolDefinition): void {
     if (this.tools.has(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`);
-    this.validators.set(tool.name, this.ajv.compile(tool.inputSchema));
+    // Remote tools own their schema namespace; one server's $id must not poison another.
+    const ajv = new Ajv({ strict: false, allErrors: true, inlineRefs: false, logger: false });
+    this.validators.set(tool.name, ajv.compile(tool.inputSchema));
     this.tools.set(tool.name, tool);
   }
   get(name: string): ToolDefinition | undefined {

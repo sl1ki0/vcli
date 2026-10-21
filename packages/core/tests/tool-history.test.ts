@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applyToolConversationEvent,
   displayToolText,
+  escapeTerminalText,
   estimateTokens,
   type ChatMessage,
   type RuntimeEvent,
@@ -118,4 +119,11 @@ test("tool display makes control codes visible and masks credential assignments"
       "hello\u001b[31m\u202etest\nOPENAI_API_KEY=private-fixture command\npassword: 'private password'",
     ),
   ).toBe("hello\\u001b[31m\\u202etest\nOPENAI_API_KEY=[redacted] command\npassword: [redacted]");
+});
+
+test("terminal text escapes C1 commands and directional marks without hiding approval arguments", () => {
+  const value = "safe\u009b2J\u009d52;c;secret\u009c\r\u200e\u061cpassword=literal\n🧩\tend";
+  expect(escapeTerminalText(value)).toBe(
+    "safe\\u009b2J\\u009d52;c;secret\\u009c\\u000d\\u200e\\u061cpassword=literal\n🧩\tend",
+  );
 });
