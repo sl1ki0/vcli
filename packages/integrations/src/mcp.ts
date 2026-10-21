@@ -6,12 +6,13 @@ import {
   type ReadResourceResult,
   type Resource,
   type Tool,
+  type Transport,
 } from "@modelcontextprotocol/client";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import type { NormalizedMcpServer, ToolDefinition, ToolResult } from "@vcli/core";
-import { message, validateServerName } from "./paths.ts";
+import { message } from "./paths.ts";
 import { validateMcpInputSchema } from "./mcp-schema.ts";
+import { validateMcpServer } from "./mcp-validation.ts";
 
 export interface McpConnection {
   listTools(signal?: AbortSignal): Promise<Tool[]>;
@@ -28,8 +29,19 @@ export type McpConnector = (
   server: NormalizedMcpServer,
   signal?: AbortSignal,
 ) => Promise<McpConnection>;
+/** The CLI owns subprocess policy; integrations must never start an unconfined server. */
+export type McpTransport = Transport;
+export interface McpStdioTransportOptions {
+  maxResponseBytes: number;
+  onDiagnostic?: (text: string) => void;
+}
+export type McpStdioTransportFactory = (
+  server: NormalizedMcpServer,
+  options: McpStdioTransportOptions,
+) => McpTransport;
 export interface McpManagerOptions {
   connector?: McpConnector;
+  stdioTransport?: McpStdioTransportFactory;
   timeoutMs?: number;
   resultChars?: number;
   /** Hard cap on decoded wire bodies and aggregated discovery lists. */
@@ -165,15 +177,13 @@ function sdkConnector(options: McpManagerOptions): McpConnector {
         listMaxPages: 64,
       },
     );
+    if (server.type === "stdio" && !options.stdioTransport)
+      throw new Error("MCP stdio requires a system-isolated transport supplied by the host");
     const transport =
       server.type === "stdio"
-        ? new StdioClientTransport({
-            command: server.command!,
-            args: server.args,
-            cwd: server.cwd,
-            env: { ...getDefaultEnvironment(), ...server.env },
-            stderr: "pipe",
-            maxBufferSize: maxBytes,
+        ? options.stdioTransport!(server, {
+            maxResponseBytes: maxBytes,
+            onDiagnostic: (text) => options.onDiagnostic?.(`${server.name}: ${text}`),
           })
         : new StreamableHTTPClientTransport(new URL(server.url!), {
             requestInit: { headers: server.headers, redirect: "error" },
@@ -192,10 +202,6 @@ function sdkConnector(options: McpManagerOptions): McpConnector {
             onInsufficientScope: "throw",
             maxStepUpRetries: 0,
           });
-    if (transport instanceof StdioClientTransport)
-      transport.stderr?.on("data", (chunk) =>
-        options.onDiagnostic?.(`${server.name}: ${String(chunk).slice(0, 4096)}`),
-      );
     client.onerror = (error) => options.onDiagnostic?.(`${server.name}: ${error.message}`);
     try {
       await client.connect(transport, { signal, timeout });
@@ -263,14 +269,16 @@ export class McpManager {
       throw new Error("MCP maxResponseBytes must be a positive safe integer");
     this.connector = options.connector ?? sdkConnector(options);
     for (const server of servers) {
-      for (const name of server.name.split(".")) validateServerName(name);
+      validateMcpServer(server);
       if (this.servers.has(server.name))
         throw new Error(`Duplicate MCP server namespace: ${server.name}`);
-      if (server.type === "stdio" && !server.command)
-        throw new Error(`MCP server ${server.name} needs a command`);
-      if (server.type === "http" && !server.url)
-        throw new Error(`MCP server ${server.name} needs a URL`);
-      this.servers.set(server.name, server);
+      // Keep the validated grant stable if the caller later edits its config object.
+      this.servers.set(server.name, {
+        ...server,
+        ...(server.args ? { args: [...server.args] } : {}),
+        ...(server.env ? { env: { ...server.env } } : {}),
+        ...(server.headers ? { headers: { ...server.headers } } : {}),
+      });
     }
   }
 

@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
   balanced,
   type ContextSettings,
@@ -10,7 +9,8 @@ import {
   type RunLimits,
 } from "@vcli/core";
 import { REASONING_EFFORTS } from "@vcli/providers";
-import { readStorageText, storagePath } from "./workflows/state-path.ts";
+import { validateMcpServer } from "@vcli/integrations";
+import { readStorageText, storageFilesystem, storagePath } from "./workflows/state-path.ts";
 
 export interface Config {
   provider: "openai" | "anthropic" | "gemini" | "openrouter" | "compatible";
@@ -98,6 +98,7 @@ export function validateConfig(config: Config): Config {
     }
   }
   if (!Array.isArray(config.mcpServers)) throw new Error("mcpServers must be an array");
+  for (const server of config.mcpServers) validateMcpServer(server);
   if (config.runLimits !== undefined) {
     if (
       !config.runLimits ||
@@ -175,20 +176,14 @@ function mergeScopedConfig(
 }
 export async function loadConfig(root: string, overrides: Partial<Config> = {}): Promise<Config> {
   const [user, project] = await Promise.all([
-    readJson(join(configHome(), "config.json")),
+    storagePath(root, ["config.json"], configHome()).then(readJson),
     storagePath(root, ["config.json"]).then(readJson),
   ]);
   return mergeScopedConfig(user, project, overrides);
 }
 export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true }).catch(() => undefined);
-  }
+  using filesystem = storageFilesystem(dirname(path), true);
+  filesystem.writeAtomic(basename(path), JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
 }
 
 /** Applies and validates a batch before the single atomic configuration write. */
@@ -206,7 +201,7 @@ export async function patchConfig(
   )
     throw new Error("context must be an object");
   const [user, local] = await Promise.all([
-    readJson(join(configHome(), "config.json")),
+    storagePath(root, ["config.json"], configHome()).then(readJson),
     storagePath(root, ["config.json"]).then(readJson),
   ]);
   const current = project ? local : user;
@@ -250,7 +245,9 @@ export async function patchConfig(
   const effective = project ? mergeScopedConfig(user, next) : mergeScopedConfig(next, local);
   if (!project) mergeConfig(next);
   await writeJsonAtomic(
-    project ? await storagePath(root, ["config.json"]) : join(configHome(), "config.json"),
+    project
+      ? await storagePath(root, ["config.json"])
+      : await storagePath(root, ["config.json"], configHome()),
     next,
   );
   return effective;

@@ -5,7 +5,7 @@ import { McpManager } from "../src/mcp.ts";
 test("discovered MCP resource operations retain external permission gates after a mode change", async () => {
   let externalReads = 0;
   const manager = new McpManager(
-    [{ name: "fixture", type: "http", url: "http://fixture.invalid" }],
+    [{ name: "fixture", type: "http", url: "https://fixture.invalid" }],
     {
       connector: async () => ({
         listTools: async () => [],

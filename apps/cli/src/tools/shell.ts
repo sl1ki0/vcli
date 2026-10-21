@@ -5,7 +5,7 @@ import { objectSchema, stringSchema } from "./schema.ts";
 export const shellTool: ToolDefinition = {
   name: "shell_run",
   description:
-    "Run a Bash command in a project directory for builds, tests, Git, or other tasks. Returns stdout, stderr and exit code. Arbitrary side effects require the active permissions and optional policy.",
+    "Run Bash in an offline source snapshot with explicit permissions and policy. Use relative project paths. Private files, Git metadata, dependency downloads and background work are unavailable. Changes import after conflict checks. Returns stdout, stderr and exit code. On macOS nested posix_spawn is unavailable.",
   kind: "execute",
   inputSchema: objectSchema(
     {

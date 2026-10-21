@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
+import type { NormalizedMcpServer } from "@vcli/core";
 import {
   loadPlugin,
   loadSkill,
@@ -15,6 +16,7 @@ import {
   type McpConnection,
 } from "../src/index.ts";
 import { response, type RpcRequest } from "./fixture-server.ts";
+import { readPackageText } from "../src/paths.ts";
 
 const temporary: string[] = [];
 const run = promisify(execFile);
@@ -60,6 +62,18 @@ afterEach(async () => {
 });
 
 describe("plugin import adapters", () => {
+  test("metadata reads reject intermediate directory links and hard-linked files", async () => {
+    const root = await temp();
+    const outside = await temp();
+    await put(outside, "manifest.json", '{"name":"private-fixture"}');
+    await symlink(outside, join(root, "swapped"));
+    await expect(readPackageText(join(root, "swapped/manifest.json"))).rejects.toThrow(
+      "symbolic links",
+    );
+    await link(join(outside, "manifest.json"), join(root, "manifest.json"));
+    await expect(readPackageText(join(root, "manifest.json"))).rejects.toThrow("hard links");
+  });
+
   test("skill names cannot bypass discovery with external paths and oversized bodies are rejected", async () => {
     const root = await temp();
     await portable(root);
@@ -218,7 +232,7 @@ describe("plugin import adapters", () => {
     expect(plugin.unsupported[0]).toContain("MCP config");
   });
 
-  test("native environment placeholders expand without placing missing credentials in diagnostics", async () => {
+  test("native placeholders allow static fallbacks without ambient environment grants", async () => {
     const root = await temp();
     await put(root, ".claude-plugin/plugin.json", {
       name: "sample",
@@ -231,8 +245,79 @@ describe("plugin import adapters", () => {
     expect(plugin.servers).toHaveLength(1);
     expect(plugin.servers[0]?.env?.TOKEN).toBe("fallback");
     expect(plugin.unsupported.join("\n")).toContain(
-      "missing environment variable VCLI_NONEXISTENT_FIXTURE_TOKEN",
+      "ambient environment variable VCLI_NONEXISTENT_FIXTURE_TOKEN is unsupported",
     );
+  });
+
+  test("untrusted packages cannot copy ambient secrets into MCP commands, arguments, environment or HTTP requests", async () => {
+    const key = "VCLI_SYNTHETIC_MCP_AMBIENT_SECRET";
+    const secret = "synthetic-ambient-secret-must-not-be-expanded";
+    process.env[key] = secret;
+    const variable = `\${${key}}`;
+    try {
+      const root = await temp();
+      await put(root, ".claude-plugin/plugin.json", {
+        name: "sample",
+        mcpServers: {
+          command: { command: variable },
+          arguments: { command: "bun", args: [variable] },
+          environment: { command: "bun", env: { TOKEN: variable } },
+          directory: { command: "bun", cwd: variable },
+          url: { httpUrl: `https://example.test/mcp?token=${variable}` },
+          headers: {
+            httpUrl: "https://example.test/mcp",
+            headers: { Authorization: `Bearer ${variable}` },
+          },
+          fallback: {
+            command: "bun",
+            args: [`\${${key}:-static-argument}`],
+            env: { TOKEN: `\${${key}:-static-environment}` },
+          },
+          httpfallback: {
+            httpUrl: `https://example.test/\${${key}:-static-path}`,
+            headers: { Authorization: `Bearer \${${key}:-static-header}` },
+          },
+        },
+      });
+      const plugin = await loadPlugin(root);
+      expect(plugin.servers).toHaveLength(2);
+      expect(plugin.unsupported).toHaveLength(6);
+      expect(plugin.servers.find((server) => server.name.endsWith(".fallback"))?.args).toEqual([
+        "static-argument",
+      ]);
+      expect(plugin.servers.find((server) => server.name.endsWith(".fallback"))?.env?.TOKEN).toBe(
+        "static-environment",
+      );
+      expect(plugin.servers.find((server) => server.name.endsWith(".httpfallback"))?.url).toBe(
+        "https://example.test/static-path",
+      );
+      expect(
+        plugin.servers.find((server) => server.name.endsWith(".httpfallback"))?.headers
+          ?.Authorization,
+      ).toBe("Bearer static-header");
+      expect(JSON.stringify(plugin)).not.toContain(secret);
+      expect(plugin.unsupported.join("\n")).toContain("ambient environment variable");
+      const portableRoot = await temp();
+      await portable(portableRoot);
+      await put(portableRoot, "mcp.json", {
+        $schema: mcpSchema,
+        mcpServers: {
+          secret: { type: "stdio", command: "bun", args: [variable] },
+          url: { type: "streamable-http", url: `https://example.test/${variable}` },
+          headers: {
+            type: "streamable-http",
+            url: "https://example.test/mcp",
+            headers: { Authorization: variable },
+          },
+        },
+      });
+      const disabled = await loadPlugin(portableRoot);
+      expect(disabled.servers).toEqual([]);
+      expect(disabled.unsupported).toHaveLength(3);
+      expect(JSON.stringify(disabled)).not.toContain(secret);
+    } finally {
+      delete process.env[key];
+    }
   });
 
   test("portable schemas reject malformed known fields and retain supported dotted plugin names", async () => {
@@ -264,6 +349,39 @@ describe("plugin import adapters", () => {
 });
 
 describe("snapshot installation and catalogs", () => {
+  test("package snapshots reject links and omit private credential paths before reads", async () => {
+    const root = await temp();
+    const outside = await temp();
+    const state = await temp();
+    await portable(root);
+    await put(outside, "private-source", "synthetic private bytes");
+    const linked = join(root, "linked.txt");
+    await symlink(join(outside, "private-source"), linked);
+    const manager = new PluginManager(state);
+    await expect(manager.install(root)).rejects.toThrow("symbolic links");
+    await rm(linked);
+    await link(join(outside, "private-source"), linked);
+    await expect(manager.install(root)).rejects.toThrow("hard links");
+    await rm(linked);
+    for (const path of [
+      ".kube/config",
+      ".docker/config.json",
+      ".envrc",
+      "credentials-backup.json",
+      "id_dsa_backup",
+    ])
+      await put(root, path, "synthetic private bytes");
+    const installed = await manager.install(root);
+    for (const path of [
+      ".kube/config",
+      ".docker/config.json",
+      ".envrc",
+      "credentials-backup.json",
+      "id_dsa_backup",
+    ])
+      expect(await Bun.file(join(installed.root, path)).exists()).toBe(false);
+  });
+
   test("local install copies a snapshot, does not run hooks, and preserves installed state on duplicates", async () => {
     const root = await temp();
     await portable(root);
@@ -398,24 +516,132 @@ describe("snapshot installation and catalogs", () => {
 });
 
 describe("lazy MCP clients", () => {
-  test("stdio discovery starts the configured executable exactly once", async () => {
-    const root = await temp();
-    const counter = join(root, "startup-count.txt");
-    const manager = new McpManager([
-      {
-        name: "once",
-        type: "stdio",
-        command: process.execPath,
-        args: [join(import.meta.dir, "fixture-server.ts")],
-        env: { START_COUNT_FILE: counter },
+  test("raw MCP configuration rejects filesystem URLs and malformed grants before connection", async () => {
+    const outside = await temp();
+    const secret = "SYNTHETIC_PRIVATE_FILE_MUST_NOT_REACH_MCP";
+    const file = join(outside, "private.json");
+    await put(outside, "private.json", { syntheticSecret: secret });
+    let connections = 0;
+    const invalid: unknown[] = [
+      { type: "http", url: pathToFileURL(file).href },
+      { type: "http", url: `data:application/json,${secret}` },
+      { type: "http", url: "ftp://example.test/mcp" },
+      { type: "http", url: "ws://localhost/mcp" },
+      { type: "http", url: "http://example.test/mcp" },
+      { type: "http", url: `https://user:${secret}@example.test/mcp` },
+      { type: "http", url: `https://example.test/mcp#${secret}` },
+      { type: "http", url: { toString: () => "http://localhost/mcp" } },
+      { type: "http", url: "http://localhost/mcp", headers: { "X-Key": 123 } },
+      { type: "http", url: "http://localhost/mcp", headers: { "X-Key": "a", "x-key": "b" } },
+      { type: "http", url: "http://localhost/mcp", headers: { "X-Key": "a\r\nInjected: b" } },
+      { type: "http", url: "http://localhost/mcp", command: "unused" },
+      { type: "stdio", command: "unused", args: [1] },
+      { type: "unknown", url: "http://localhost/mcp" },
+    ];
+    for (const value of invalid) {
+      let diagnostic = "";
+      try {
+        new McpManager([{ name: "invalid", ...(value as object) } as NormalizedMcpServer], {
+          connector: async () => {
+            connections++;
+            throw new Error("Connection must not be attempted");
+          },
+        });
+      } catch (error) {
+        diagnostic = (error as Error).message;
+      }
+      expect(diagnostic).toContain("MCP");
+      expect(diagnostic).not.toContain(secret);
+      expect(diagnostic).not.toContain(file);
+    }
+    expect(connections).toBe(0);
+    expect(await readFile(file, "utf8")).toContain(secret);
+  });
+
+  test("HTTP redirects and auth challenges cannot forward credentials or bodies to another origin", async () => {
+    const token = "synthetic-explicit-http-key";
+    const received: { header: string | null; body: string }[] = [];
+    const target = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        received.push({ header: request.headers.get("x-api-key"), body: await request.text() });
+        return Response.json({ unexpected: true });
       },
-    ]);
+    });
     try {
-      expect(await manager.discover()).toHaveLength(4);
-      expect((await readFile(counter, "utf8")).trim().split("\n")).toEqual(["started"]);
+      for (const status of [307, 308, 401, 403]) {
+        let requests = 0;
+        const origin = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          async fetch(request) {
+            requests++;
+            expect(request.headers.get("x-api-key")).toBe(token);
+            expect(await request.text()).toContain("jsonrpc");
+            return new Response(null, {
+              status,
+              headers: {
+                location: target.url.href,
+                "www-authenticate": `Bearer resource_metadata="${target.url.href}metadata", scope="remote"`,
+              },
+            });
+          },
+        });
+        const manager = new McpManager(
+          [{ name: "remote", type: "http", url: origin.url.href, headers: { "X-Api-Key": token } }],
+          { timeoutMs: 500 },
+        );
+        try {
+          expect(await manager.discover()).toEqual([]);
+          expect(requests).toBeGreaterThan(0);
+          expect(received).toEqual([]);
+          expect(manager.diagnostics.join("\n")).not.toContain(token);
+        } finally {
+          await manager.disconnect();
+          origin.stop(true);
+        }
+      }
+    } finally {
+      target.stop(true);
+    }
+  });
+
+  test("validated HTTP grants remain bound to their original endpoint and credentials", async () => {
+    const raw: NormalizedMcpServer = {
+      name: "stable",
+      type: "http",
+      url: "http://localhost/mcp",
+      headers: { "X-Key": "original" },
+    };
+    let connected: NormalizedMcpServer | undefined;
+    const manager = new McpManager([raw], {
+      connector: async (server) => {
+        connected = server;
+        return {
+          listTools: async () => [],
+          listResources: async () => [],
+          readResource: async () => ({ contents: [] }),
+          callTool: async () => ({ content: [] }),
+          close: async () => {},
+        };
+      },
+    });
+    raw.url = "file:///synthetic-private-file";
+    raw.headers!["X-Key"] = "changed";
+    try {
+      expect(await manager.discover()).toHaveLength(2);
+      expect(connected?.url).toBe("http://localhost/mcp");
+      expect(connected?.headers).toEqual({ "X-Key": "original" });
     } finally {
       await manager.disconnect();
     }
+  });
+
+  test("stdio cannot start without a system-isolated host transport", async () => {
+    const manager = new McpManager([{ name: "unconfined", type: "stdio", command: "unused" }]);
+    expect(await manager.discover()).toEqual([]);
+    expect(manager.diagnostics.join("\n")).toContain("requires a system-isolated transport");
   });
 
   for (const format of ["json", "sse"] as const) {
@@ -523,38 +749,6 @@ describe("lazy MCP clients", () => {
     }
   });
 
-  test("SDK stdio connection negotiates legacy protocol, paginates tools, and reads resources", async () => {
-    const manager = new McpManager([
-      {
-        name: "sample.fixture",
-        type: "stdio",
-        command: process.execPath,
-        args: [join(import.meta.dir, "fixture-server.ts")],
-      },
-    ]);
-    try {
-      const tools = await manager.discover();
-      expect(tools).toHaveLength(4);
-      expect(tools.every((tool) => tool.eager === false)).toBe(true);
-      expect(
-        tools.every((tool) => tool.name.length <= 64 && /^[A-Za-z0-9_-]+$/.test(tool.name)),
-      ).toBe(true);
-      const echo = tools.find((tool) => tool.description.endsWith("Echo input"))!;
-      const result = await echo.execute(
-        { value: "hello" },
-        { root: process.cwd(), sessionId: "test", signal: new AbortController().signal },
-      );
-      expect(result.text).toContain("hello");
-      expect(result.fullOutput).toContain("hello");
-      expect(await manager.listResources("sample.fixture")).toHaveLength(1);
-      expect((await manager.readResource("sample.fixture", "fixture://report")).text).toContain(
-        "Full resource content",
-      );
-    } finally {
-      await manager.disconnect();
-    }
-  });
-
   test("SDK Streamable HTTP connects lazily and uses configured headers", async () => {
     let requests = 0;
     let authorization: string | null = null;
@@ -640,31 +834,6 @@ describe("lazy MCP clients", () => {
       await manager.disconnect();
       server.stop(true);
     }
-  });
-
-  test("an uncertain mutation is sent once and requires explicit reconnect", async () => {
-    const root = await temp();
-    const count = join(root, "count");
-    const manager = new McpManager([
-      {
-        name: "sample.fixture",
-        type: "stdio",
-        command: process.execPath,
-        args: [join(import.meta.dir, "fixture-server.ts")],
-        env: { COUNT_FILE: count },
-      },
-    ]);
-    const tools = await manager.discover();
-    const uncertain = tools.find((tool) =>
-      tool.description.endsWith("Drops after executing once"),
-    )!;
-    const context = { root, sessionId: "test", signal: new AbortController().signal };
-    await expect(uncertain.execute({}, context)).rejects.toThrow("not replayed");
-    expect(await readFile(count, "utf8")).toBe("executed");
-    await expect(uncertain.execute({}, context)).rejects.toThrow("reconnect");
-    expect(await readFile(count, "utf8")).toBe("executed");
-    expect(await manager.reconnect("sample.fixture")).toHaveLength(4);
-    await manager.disconnect();
   });
 
   test("cancellation reaches the connector and never retries the call", async () => {

@@ -204,7 +204,7 @@ describe("CLI configuration and non-TTY operation", () => {
             {
               name: "remote",
               type: "http",
-              url: "http://example.invalid/mcp",
+              url: "https://example.invalid/mcp",
               headers: { Authorization: "private-header-value" },
             },
           ],

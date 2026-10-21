@@ -47,6 +47,7 @@ export function response(request: RpcRequest): Record<string, unknown> | undefin
   if (request.method === "tools/call") {
     if (request.params?.name === "uncertain" && process.env.COUNT_FILE) {
       writeFileSync(process.env.COUNT_FILE, "executed");
+      process.stderr.write("uncertain fixture executed\n");
       process.exit(1);
     }
     return result({

@@ -26,6 +26,7 @@ import { resolveCredential } from "./credentials.ts";
 import { createLocalWorkflows } from "./workflows/runtime.ts";
 import { savePlan } from "./workflows/plans.ts";
 import { scopedArchitecture } from "./workflows/architecture-policy.ts";
+import { sandboxedMcpTransport } from "./workflows/mcp-transport.ts";
 
 export interface HarnessOptions {
   apiKey?: string;
@@ -95,7 +96,14 @@ export async function createHarness(
   const skills = [...localSkills, ...plugins.flatMap((p) => p.skills)];
   const servers = [...config.mcpServers, ...plugins.flatMap((p) => p.servers)];
   const startupContract = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
-  const mcp = new McpManager(servers);
+  const mcp = new McpManager(servers, {
+    stdioTransport: sandboxedMcpTransport(
+      root,
+      new Map(
+        plugins.flatMap((plugin) => plugin.servers.map((server) => [server.name, plugin.root])),
+      ),
+    ),
+  });
   const permissions = new PermissionGate(
     options.mode === "plan" ? "read-only" : config.permission,
     approve,

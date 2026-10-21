@@ -276,35 +276,13 @@ setTimeout(() => { writeFileSync("survived", "escaped"); }, 900);
       beforeTool: [{ name: "descendant", command: `${executable} descendant.ts & wait` }],
     });
     const pending = runner.beforeTool(call, context(root, controller.signal));
-    try {
-      const deadline = performance.now() + 1500;
-      while (performance.now() < deadline) {
-        if (
-          await access(join(root, "ready")).then(
-            () => true,
-            () => false,
-          )
-        )
-          break;
-        await Bun.sleep(10);
-      }
-      expect(
-        await access(join(root, "ready")).then(
-          () => true,
-          () => false,
-        ),
-      ).toBe(true);
-      controller.abort();
-      await expect(pending).rejects.toThrow("aborted");
-      await Bun.sleep(950);
-      await expect(access(join(root, "survived"))).rejects.toThrow();
-    } finally {
-      controller.abort();
-      await pending.catch(() => {});
-      try {
-        process.kill(Number(await readFile(join(root, "ready"), "utf8")), "SIGKILL");
-      } catch {}
-    }
+    // Staged writes become visible only after command completion. Cancellation
+    // must drain descendants and discard their partial tree without importing it.
+    setTimeout(() => controller.abort(), 150);
+    await expect(pending).rejects.toThrow("aborted");
+    await Bun.sleep(950);
+    await expect(access(join(root, "ready"))).rejects.toThrow();
+    await expect(access(join(root, "survived"))).rejects.toThrow();
   });
 
   test("successful hook shell exit drains unsupported background work", async () => {
@@ -329,17 +307,13 @@ setTimeout(() => { writeFileSync("survived", "escaped"); }, 900);
         },
       ],
     });
-    try {
-      const reports = await runner.afterTool(call, { text: "completed" }, context(root));
-      expect(reports[0]!.status).toBe("failed");
+    const reports = await runner.afterTool(call, { text: "completed" }, context(root));
+    expect(reports[0]!.status).toBe(process.platform === "linux" ? "success" : "failed");
+    if (process.platform !== "linux")
       expect(reports[0]!.output).toContain("Background subprocesses were terminated");
-      await Bun.sleep(950);
-      await expect(access(join(root, "survived"))).rejects.toThrow();
-    } finally {
-      try {
-        process.kill(Number(await readFile(join(root, "ready"), "utf8")), "SIGKILL");
-      } catch {}
-    }
+    // Child PIDs inside Linux belong to another namespace. The wrapper owns cleanup.
+    await Bun.sleep(950);
+    await expect(access(join(root, "survived"))).rejects.toThrow();
   });
 
   test("hook configuration rejects linked external files and parent directories", async () => {

@@ -627,6 +627,48 @@ describe("workspace setup backend", () => {
     ).toMatchObject({ context: { taskTokens: 9000 }, runLimits: { modelRequests: 20 } });
   });
 
+  test("raw project MCP settings reject non-HTTP destinations and malformed values before startup", async () => {
+    const outside = join(directory, "synthetic-private.json");
+    const sentinel = "SYNTHETIC_PRIVATE_CONFIGURATION_SENTINEL";
+    await writeFile(outside, sentinel);
+    for (const url of [
+      `file://${outside}`,
+      `data:application/json,${sentinel}`,
+      `https://user:${sentinel}@example.test/mcp`,
+      `https://example.test/mcp#${sentinel}`,
+      "http://public.example.test/mcp",
+      123,
+      null,
+    ]) {
+      await put(join(root, ".vcli/config.json"), {
+        mcpServers: [{ name: "raw", type: "http", url }],
+      });
+      let diagnostic = "";
+      try {
+        await loadConfig(root);
+      } catch (error) {
+        diagnostic = (error as Error).message;
+      }
+      expect(diagnostic).toContain("MCP");
+      expect(diagnostic).not.toContain(sentinel);
+      expect(diagnostic).not.toContain(outside);
+    }
+    await put(join(root, ".vcli/config.json"), {
+      mcpServers: [
+        {
+          name: "raw",
+          type: "http",
+          url: "http://127.0.0.1:1234/mcp",
+          headers: { "X-Key": "explicit-literal" },
+        },
+      ],
+    });
+    expect((await loadConfig(root)).mcpServers[0]?.headers).toEqual({
+      "X-Key": "explicit-literal",
+    });
+    expect(await readFile(outside, "utf8")).toBe(sentinel);
+  });
+
   test("project configuration refuses linked parent directories before reading or writing", async () => {
     const outside = join(directory, "outside");
     await mkdir(outside);

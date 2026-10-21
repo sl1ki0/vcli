@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { mkdir, open, realpath, unlink } from "node:fs/promises";
-import { dirname, relative } from "node:path";
+import { realpath } from "node:fs/promises";
+import { relative } from "node:path";
 import { boundText, type ToolContext, type ToolDefinition } from "@vcli/core";
 import { projectPath } from "../workflows/policy.ts";
-import { readFileBytes } from "../workflows/file-data.ts";
+import { RootedFileSystem } from "../workflows/rooted-filesystem.ts";
 
 import { executeProcess } from "./process.ts";
 import { lineNumberSchema, objectSchema, stringSchema } from "./schema.ts";
@@ -19,35 +18,6 @@ export async function authorizeFilePath(
 ): Promise<string> {
   const canonical = await projectPath(context.root, path, { write, allowRoot });
   return context.authorizePath ? context.authorizePath(canonical, write) : canonical;
-}
-
-async function readRegularFile(path: string): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1)
-      throw new Error("File tools require regular files without hard links.");
-    return (await readFileBytes(handle, MAX_FILE_BYTES)).toString("utf8");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function writeRegularFile(path: string, content: string): Promise<void> {
-  const handle = await open(
-    path,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    0o666,
-  );
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1)
-      throw new Error("File tools require regular files without hard links.");
-    await handle.truncate(0);
-    await handle.writeFile(content);
-  } finally {
-    await handle.close();
-  }
 }
 
 export const fileTools: ToolDefinition[] = [
@@ -69,9 +39,14 @@ export const fileTools: ToolDefinition[] = [
         [
           "--no-config",
           "--files",
+          "--null",
           "--hidden",
           "--glob",
+          "!.git",
+          "--glob",
           "!.git/**",
+          "--glob",
+          "!.vcli",
           "--glob",
           "!.vcli/**",
           "--",
@@ -79,10 +54,11 @@ export const fileTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read" },
       );
       const paths: string[] = [];
       const root = await realpath(context.root);
-      for (const candidate of listed.output.split("\n").filter(Boolean)) {
+      for (const candidate of listed.stdout.split("\0").filter(Boolean)) {
         try {
           paths.push(relative(root, await authorizeFilePath(context, candidate)));
         } catch {
@@ -107,6 +83,7 @@ export const fileTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read" },
       );
       if (result.code > 1) return { text: result.output, isError: true };
       return {
@@ -125,7 +102,8 @@ export const fileTools: ToolDefinition[] = [
     ),
     async execute(args, context) {
       const path = await authorizeFilePath(context, args.path as string);
-      const raw = await readRegularFile(path);
+      using filesystem = new RootedFileSystem(context.root);
+      const raw = filesystem.readText(path, MAX_FILE_BYTES);
       const lines = raw.split("\n");
       const start = Number(args.start ?? 1);
       const end = Number(args.end ?? Math.min(lines.length, start + 199));
@@ -165,12 +143,9 @@ export const fileTools: ToolDefinition[] = [
     ),
     async execute(args, context) {
       const path = await authorizeFilePath(context, args.path as string, true);
-      let original: string | undefined;
-      try {
-        original = await readRegularFile(path);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+      using filesystem = new RootedFileSystem(context.root);
+      const before = filesystem.snapshot(path, MAX_FILE_BYTES);
+      const original = before?.content.toString("utf8");
 
       let content = String(args.newText);
       if (args.oldText !== undefined) {
@@ -190,9 +165,8 @@ export const fileTools: ToolDefinition[] = [
       }
 
       context.signal.throwIfAborted();
-      await mkdir(dirname(path), { recursive: true });
       await authorizeFilePath(context, path, true);
-      await writeRegularFile(path, content);
+      filesystem.writeAtomic(path, content, { expected: before ?? null });
       return { text: `Updated ${args.path}`, changedPaths: [String(args.path)] };
     },
   },
@@ -205,7 +179,10 @@ export const fileTools: ToolDefinition[] = [
     async execute(args, context) {
       const path = await authorizeFilePath(context, args.path as string, true);
       context.signal.throwIfAborted();
-      await unlink(path);
+      using filesystem = new RootedFileSystem(context.root);
+      const before = filesystem.snapshot(path, MAX_FILE_BYTES);
+      if (!before) throw new Error("Project file does not exist.");
+      filesystem.delete(path, { expected: before });
       return { text: `Deleted ${args.path}`, changedPaths: [args.path as string] };
     },
   },

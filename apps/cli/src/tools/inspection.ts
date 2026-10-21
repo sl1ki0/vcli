@@ -29,6 +29,7 @@ export const inspectionTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read" },
       );
       const paths: string[] = [];
       for (const path of result.output.split("\n").filter(Boolean)) {
@@ -77,6 +78,7 @@ export const inspectionTools: ToolDefinition[] = [
           ],
           context,
           20_000,
+          { access: "read", allowGitRead: true },
         );
         if (listed.code !== 0) return { text: listed.output, isError: true };
         scope = [];
@@ -108,6 +110,7 @@ export const inspectionTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read", allowGitRead: true },
       );
       return {
         text: boundText(result.output || "No changes.", 3000),
