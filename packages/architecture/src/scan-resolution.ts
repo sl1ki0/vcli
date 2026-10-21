@@ -24,10 +24,11 @@ export function resolveImports(
   nodes: ArchitectureNode[],
   edges: ArchitectureEdge[],
   diagnostics: string[],
+  allowedPaths?: Set<string>,
 ) {
   const { manifests, owner } = packages;
   const workspace = workspacePackages(manifests, diagnostics);
-  const compiler = createCompilerResolver(root, diagnostics);
+  const compiler = createCompilerResolver(root, diagnostics, allowedPaths);
   const known = new Map<string, ArchitectureNode>();
   for (const node of nodes) {
     if (!node.path || !parsed.has(node.path)) continue;

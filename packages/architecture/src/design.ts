@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import type {
@@ -11,6 +11,7 @@ import type {
 } from "@vcli/core";
 import { emptyStats, findCycles, graphRevision } from "./graph.ts";
 import { compare, matchesPath, slash } from "./utils.ts";
+import { architectureStatePath, readArchitectureState } from "./state-path.ts";
 
 export class ArchitectureDesignError extends Error {
   constructor(message: string) {
@@ -75,7 +76,7 @@ export function validateDesign(value: unknown): ArchitectureDesign {
 export async function readDesign(root: string): Promise<ArchitectureDesign> {
   try {
     return validateDesign(
-      JSON.parse(await readFile(join(root, ".vcli", "architecture.json"), "utf8")),
+      JSON.parse(await readArchitectureState(root, ["architecture.json"], 1024 * 1024)),
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -88,11 +89,21 @@ export async function readDesign(root: string): Promise<ArchitectureDesign> {
 
 export async function writeDesign(root: string, value: ArchitectureDesign): Promise<void> {
   const design = validateDesign(value);
-  const directory = join(root, ".vcli");
+  const content = `${JSON.stringify(design, null, 2)}\n`;
+  if (Buffer.byteLength(content) > 1024 * 1024)
+    throw new ArchitectureDesignError("design exceeds 1 MiB");
+  const destination = await architectureStatePath(root, "architecture.json");
+  const directory = await architectureStatePath(root);
   await mkdir(directory, { recursive: true });
+  await architectureStatePath(root, "architecture.json");
   const temporary = join(directory, `.architecture-${randomUUID()}.tmp`);
-  await writeFile(temporary, `${JSON.stringify(design, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporary, join(directory, "architecture.json"));
+  try {
+    await writeFile(temporary, content, { mode: 0o600, flag: "wx" });
+    await architectureStatePath(root, "architecture.json");
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 export function intendedGraph(root: string, value: ArchitectureDesign): ArchitectureGraph {

@@ -25,6 +25,7 @@ import { SqliteSessionStore } from "./store.ts";
 import { resolveCredential } from "./credentials.ts";
 import { createLocalWorkflows } from "./workflows/runtime.ts";
 import { savePlan } from "./workflows/plans.ts";
+import { scopedArchitecture } from "./workflows/architecture-policy.ts";
 
 export interface HarnessOptions {
   apiKey?: string;
@@ -72,6 +73,7 @@ export async function createHarness(
     throw new Error("Resume must retain the policy file bound to this run.");
   }
   const policyPath = previous?.executionPolicy?.path ?? options.policyPath;
+  architecture = scopedArchitecture(architecture, policyPath, options.stateDirectory);
   const registry = new ToolRegistry();
   const manager = new PluginManager(join(configHome(), "extensions"));
   let plugins;
@@ -125,7 +127,14 @@ export async function createHarness(
       signal.throwIfAborted();
       const tools = await mcp.discover(undefined, signal);
       signal.throwIfAborted();
-      for (const tool of tools) registry.register(tool);
+      for (const tool of tools) {
+        try {
+          registry.register(tool);
+        } catch {
+          // Server-controlled compiler errors can contain schema text or secrets.
+          diagnostics.push(`MCP tool ${tool.name} disabled: invalid tool schema`);
+        }
+      }
       discovered = true;
     },
   });
@@ -149,7 +158,7 @@ export async function createHarness(
           runtime.currentSession?.mode !== "plan" &&
           !discovered &&
           servers.length
-            ? 1
+            ? servers.length
             : 0,
         description: `Connect configured MCP servers: ${servers.map((server) => server.name).join(", ")} (contract ${startupContract})`,
       }),

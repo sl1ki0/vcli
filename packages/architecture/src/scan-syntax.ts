@@ -1,11 +1,18 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import ts from "typescript";
 import { JS_SOURCE, SOURCE, MAX_SOURCE_BYTES } from "./scan-inventory.ts";
 import { compare, hash } from "./utils.ts";
+import { ArchitectureScanLimitError } from "./scan-limits.ts";
+import {
+  architectureStatePath,
+  readArchitectureState,
+  readArchitectureFile,
+} from "./state-path.ts";
 
 export const CACHE_VERSION = `3:${ts.version}`;
+export const MAX_TOTAL_SOURCE_BYTES = 128 * 1024 * 1024;
 
 export interface ImportRecord {
   specifier: string;
@@ -61,7 +68,7 @@ function validCache(value: unknown, root: string): value is IndexCache {
 export async function loadCache(root: string, diagnostics: string[]): Promise<IndexCache> {
   try {
     const value: unknown = JSON.parse(
-      await readFile(join(root, ".vcli", "state", "architecture-index.json"), "utf8"),
+      await readArchitectureState(root, ["state", "architecture-index.json"], 32 * 1024 * 1024),
     );
     if (validCache(value, root)) return value;
   } catch (error) {
@@ -72,12 +79,19 @@ export async function loadCache(root: string, diagnostics: string[]): Promise<In
 }
 
 export async function persistCache(cache: IndexCache, diagnostics: string[]) {
-  const directory = join(cache.root, ".vcli", "state");
-  const temporary = join(directory, `.architecture-index-${randomUUID()}.tmp`);
   try {
+    const destination = await architectureStatePath(cache.root, "state", "architecture-index.json");
+    const directory = await architectureStatePath(cache.root, "state");
     await mkdir(directory, { recursive: true });
-    await writeFile(temporary, JSON.stringify(cache), { mode: 0o600 });
-    await rename(temporary, join(directory, "architecture-index.json"));
+    await architectureStatePath(cache.root, "state", "architecture-index.json");
+    const temporary = join(directory, `.architecture-index-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, JSON.stringify(cache), { mode: 0o600, flag: "wx" });
+      await architectureStatePath(cache.root, "state", "architecture-index.json");
+      await rename(temporary, destination);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   } catch (error) {
     diagnostics.push(`Architecture index was not saved: ${(error as Error).message}`);
   }
@@ -212,14 +226,14 @@ export async function collectSyntaxFacts(
     parsed: 0,
     cached: 0,
   };
+  let sourceBytes = 0;
   for (const path of paths.filter((path) => SOURCE.test(path))) {
     try {
       const absolute = join(root, path);
-      if ((await stat(absolute)).size > MAX_SOURCE_BYTES) {
-        diagnostics.push(`${path}: source exceeds ${MAX_SOURCE_BYTES} bytes and was skipped`);
-        continue;
-      }
-      const text = await readFile(absolute, "utf8");
+      const text = await readArchitectureFile(absolute, MAX_SOURCE_BYTES);
+      sourceBytes += Buffer.byteLength(text);
+      if (sourceBytes > MAX_TOTAL_SOURCE_BYTES)
+        throw new ArchitectureScanLimitError("Architecture scan source exceeds 128 MiB.");
       const contentHash = hash(text);
       const previous = previousCache.files[path];
       let record: ParsedFile;
@@ -235,6 +249,7 @@ export async function collectSyntaxFacts(
       index.lineCounts.set(path, text.split(/\r?\n/).length);
       diagnostics.push(...record.diagnostics);
     } catch (error) {
+      if (error instanceof ArchitectureScanLimitError) throw error;
       diagnostics.push(`${path}: ${(error as Error).message}`);
     }
   }

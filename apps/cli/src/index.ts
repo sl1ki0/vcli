@@ -2,7 +2,7 @@
 import { createArchitectureService } from "@vcli/architecture";
 import { configOverrides, parseCliArgs, resolveSettings } from "./args.ts";
 import { HELP } from "./help.ts";
-import { print } from "./io.ts";
+import { print, writeOutput } from "./io.ts";
 import { interactive } from "./interactive.ts";
 import { architectureCommand } from "./commands/architecture.ts";
 import { configCommand } from "./commands/config.ts";
@@ -11,6 +11,7 @@ import { sessionsCommand } from "./commands/sessions.ts";
 import { runCommand } from "./commands/run.ts";
 import { workflowsCommand } from "./commands/workflows.ts";
 import { runOptions } from "./run-options.ts";
+import { scopedArchitecture } from "./workflows/architecture-policy.ts";
 export { printTree } from "./io.ts";
 
 async function main(): Promise<void> {
@@ -20,7 +21,12 @@ async function main(): Promise<void> {
     return;
   }
   const { root, config } = await resolveSettings(values);
-  const architecture = createArchitectureService();
+  const execution = runOptions(values);
+  const architecture = scopedArchitecture(
+    createArchitectureService(),
+    execution.policyPath,
+    execution.stateDirectory,
+  );
   const context = { root, config, architecture, values };
   const [command, action, ...rest] = positionals;
   switch (command) {
@@ -59,11 +65,12 @@ async function main(): Promise<void> {
   }
 }
 if (import.meta.main)
-  main().catch((error) => {
-    console.error(
-      process.env.VCLI_DEBUG
-        ? error
-        : "vcli: " + (error instanceof Error ? error.message : String(error)),
+  main().catch(async (error) => {
+    await writeOutput(
+      (process.env.VCLI_DEBUG && error instanceof Error
+        ? (error.stack ?? error.message)
+        : "vcli: " + (error instanceof Error ? error.message : String(error))) + "\n",
+      "stderr",
     );
     process.exitCode = 1;
   });

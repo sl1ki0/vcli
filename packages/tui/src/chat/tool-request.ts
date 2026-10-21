@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@vcli/core";
+import { escapeTerminalText as displayText, type ToolDefinition } from "@vcli/core";
 
 export interface ToolRequest {
   name: string;
@@ -70,12 +70,4 @@ function displayValue(value: unknown): string {
       : "(empty object)";
   }
   return String(value);
-}
-
-function displayText(value: string): string {
-  // Keep source newlines, but make terminal controls and direction overrides visible.
-  return value.replace(
-    /[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
 }
