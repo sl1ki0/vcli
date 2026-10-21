@@ -15,7 +15,7 @@ export async function inspectWorkspace(
   if (topic !== "sessions" && topic !== "plugins" && topic !== "skills")
     return inspectWorkflow(root, topic, session);
   if (topic === "sessions") {
-    const store = await SqliteSessionStore.open(root, options);
+    const store = await SqliteSessionStore.open(root, { ...options, readOnlySnapshot: true });
     try {
       const sessions = await store.list(root);
       return sessions.length

@@ -1,6 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type {
   ArchitectureDesign,
   ArchitectureEdge,
@@ -11,6 +9,7 @@ import type {
 } from "@vcli/core";
 import { emptyStats, findCycles, graphRevision } from "./graph.ts";
 import { compare, matchesPath, slash } from "./utils.ts";
+import { writeArchitectureState, readArchitectureState } from "./state-path.ts";
 
 export class ArchitectureDesignError extends Error {
   constructor(message: string) {
@@ -75,7 +74,7 @@ export function validateDesign(value: unknown): ArchitectureDesign {
 export async function readDesign(root: string): Promise<ArchitectureDesign> {
   try {
     return validateDesign(
-      JSON.parse(await readFile(join(root, ".vcli", "architecture.json"), "utf8")),
+      JSON.parse(await readArchitectureState(root, ["architecture.json"], 1024 * 1024)),
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -88,11 +87,10 @@ export async function readDesign(root: string): Promise<ArchitectureDesign> {
 
 export async function writeDesign(root: string, value: ArchitectureDesign): Promise<void> {
   const design = validateDesign(value);
-  const directory = join(root, ".vcli");
-  await mkdir(directory, { recursive: true });
-  const temporary = join(directory, `.architecture-${randomUUID()}.tmp`);
-  await writeFile(temporary, `${JSON.stringify(design, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporary, join(directory, "architecture.json"));
+  const content = `${JSON.stringify(design, null, 2)}\n`;
+  if (Buffer.byteLength(content) > 1024 * 1024)
+    throw new ArchitectureDesignError("design exceeds 1 MiB");
+  writeArchitectureState(root, ".vcli/architecture.json", content);
 }
 
 export function intendedGraph(root: string, value: ArchitectureDesign): ArchitectureGraph {

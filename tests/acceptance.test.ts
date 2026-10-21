@@ -612,7 +612,7 @@ describe("architecture-first harness acceptance", () => {
       await writeFile(join(root, "src/index.ts"), "aaa");
       harness = await createHarness(
         root,
-        await settings(root, "http://unused.invalid"),
+        await settings(root, "http://127.0.0.1:9"),
         createArchitectureService(),
       );
       await expect(
@@ -670,7 +670,7 @@ describe("MCP discovery cancellation acceptance", () => {
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     let pending: Promise<unknown> | undefined;
     try {
-      const config = await settings(root, "http://unused.invalid");
+      const config = await settings(root, "http://127.0.0.1:9");
       config.mcpServers = [{ name: "fixture", type: "http", url: server.url.href }];
       harness = await createHarness(root, config, createArchitectureService());
       const search = (signal: AbortSignal) =>
@@ -732,7 +732,6 @@ describe("shell cancellation acceptance", () => {
   test("timeout kills a process that ignores SIGTERM", async () => {
     if (process.platform === "win32") return;
     const root = await mkdtemp(join(tmpdir(), "vcli-process-"));
-    const pidFile = join(root, "pid.txt");
     await writeFile(
       join(root, "stubborn.ts"),
       'import { writeFileSync } from "node:fs";\nprocess.on("SIGTERM", () => {});\nwriteFileSync("pid.txt", String(process.pid));\nsetInterval(() => {}, 1000);\n',
@@ -761,10 +760,6 @@ describe("shell cancellation acceptance", () => {
       expect(performance.now() - started).toBeLessThan(2300);
     } finally {
       clearTimeout(watchdog);
-      try {
-        const pid = Number(await readFile(pidFile, "utf8"));
-        process.kill(-pid, "SIGKILL");
-      } catch {}
       await result.catch(() => {});
       await rm(root, { recursive: true, force: true });
     }
@@ -809,9 +804,6 @@ describe("shell cancellation acceptance", () => {
       ).rejects.toThrow("Acceptance cancellation");
     } finally {
       clearTimeout(watchdog);
-      try {
-        process.kill(-Number(await readFile(join(root, "pid.txt"), "utf8")), "SIGKILL");
-      } catch {}
       await result.catch(() => {});
       await rm(root, { recursive: true, force: true });
     }

@@ -69,6 +69,7 @@ export async function exitSmoke(command: string | string[]) {
       env: {
         VCLI_CONFIG_HOME: join(root, "configuration"),
         VCLI_COMPATIBLE_API_KEY: "local-fixture-key",
+        VCLI_COMPATIBLE_BASE_URL: server.url.origin,
       },
     };
     terminal = createWorkspaceTerminal(options);

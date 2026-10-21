@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, link, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { estimateTokens, PermissionGate, type ToolContext } from "@vcli/core";
@@ -60,6 +60,73 @@ describe("project memory", () => {
     const memory = await loadProjectMemory(root);
     expect(memory.diagnostics[0]).toContain("AGENTS.md");
     expect(memory.text).toContain("Retained instructions");
+  });
+
+  test("automatic instructions and memory reads reject linked external content", async () => {
+    const root = await fixture();
+    const external = await fixture();
+    const secret = join(external, "synthetic-secret.txt");
+    await writeFile(secret, "synthetic external secret");
+    await symlink(secret, join(root, "AGENTS.md"));
+    await link(secret, join(root, "CLAUDE.md"));
+    await symlink(secret, join(root, ".vcli/MEMORY.md"));
+    const loaded = await loadProjectMemory(root);
+    expect(loaded.text).not.toContain("synthetic external secret");
+    expect(loaded.sources).toEqual([]);
+    expect(loaded.diagnostics).toHaveLength(3);
+    await expect(createMemoryTools()[0]!.execute({}, context(root))).rejects.toThrow();
+    await rm(join(root, ".vcli/MEMORY.md"));
+    await link(secret, join(root, ".vcli/MEMORY.md"));
+    await expect(createMemoryTools()[0]!.execute({}, context(root))).rejects.toThrow("hard links");
+    await expect(
+      createMemoryTools()[1]!.execute({ text: "replace", expectedRevision: null }, context(root)),
+    ).rejects.toThrow("hard links");
+    expect(await readFile(secret, "utf8")).toBe("synthetic external secret");
+  });
+
+  test("memory refuses a symlinked parent directory before reading external files", async () => {
+    const root = await fixture();
+    const external = await fixture();
+    await writeFile(join(external, "MEMORY.md"), "synthetic external memory");
+    await rm(join(root, ".vcli"), { recursive: true });
+    await symlink(external, join(root, ".vcli"));
+    expect((await loadProjectMemory(root)).text).not.toContain("synthetic external memory");
+    await expect(createMemoryTools()[0]!.execute({}, context(root))).rejects.toThrow("symbolic");
+    await expect(
+      createMemoryTools()[1]!.execute({ text: "replace", expectedRevision: null }, context(root)),
+    ).rejects.toThrow("symbolic");
+    expect(await readFile(join(external, "MEMORY.md"), "utf8")).toBe("synthetic external memory");
+  });
+
+  test("FIFO instruction and hook files fail without waiting for a writer", async () => {
+    if (process.platform === "win32") return;
+    const root = await fixture();
+    const fifo = join(root, ".vcli/MEMORY.md");
+    const hookFifo = join(root, ".vcli/hooks.json");
+    expect(
+      await Bun.spawn(["mkfifo", fifo, hookFifo], { stdout: "ignore", stderr: "ignore" }).exited,
+    ).toBe(0);
+    const memoryModule = join(import.meta.dir, "../apps/cli/src/workflows/memory.ts");
+    const hookModule = join(import.meta.dir, "../apps/cli/src/workflows/hooks.ts");
+    const script = `
+import { loadProjectMemory } from ${JSON.stringify(memoryModule)};
+import { loadProjectHooks } from ${JSON.stringify(hookModule)};
+const memory = await loadProjectMemory(${JSON.stringify(root)});
+if (memory.sources.length || !memory.diagnostics.length) process.exit(2);
+try { await loadProjectHooks(${JSON.stringify(root)}, {}); process.exit(3); } catch {}
+`;
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd: root,
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 1500);
+    try {
+      expect(await child.exited).toBe(0);
+    } finally {
+      clearTimeout(watchdog);
+      child.kill("SIGKILL");
+    }
   });
 
   test("memory writes require the current revision and the shared write permission", async () => {
@@ -189,6 +256,79 @@ describe("project command hooks", () => {
     const report = (await large.afterTool(call, { text: "done" }, context(root)))[0]!;
     expect(Buffer.byteLength(report.output)).toBeLessThanOrEqual(16_384);
     expect(report.truncated).toBe(true);
+  });
+
+  test("cancellation escalates after the shell exits with a resistant descendant", async () => {
+    if (process.platform === "win32") return;
+    const root = await fixture();
+    await writeFile(
+      join(root, "descendant.ts"),
+      `import { closeSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+closeSync(1); closeSync(2);
+writeFileSync("ready", String(process.pid));
+setTimeout(() => { writeFileSync("survived", "escaped"); }, 900);
+`,
+    );
+    const executable = "'" + process.execPath.replaceAll("'", "'\"'\"'") + "'";
+    const controller = new AbortController();
+    const runner = await hooks(root, {
+      beforeTool: [{ name: "descendant", command: `${executable} descendant.ts & wait` }],
+    });
+    const pending = runner.beforeTool(call, context(root, controller.signal));
+    // Staged writes become visible only after command completion. Cancellation
+    // must drain descendants and discard their partial tree without importing it.
+    setTimeout(() => controller.abort(), 150);
+    await expect(pending).rejects.toThrow("aborted");
+    await Bun.sleep(950);
+    await expect(access(join(root, "ready"))).rejects.toThrow();
+    await expect(access(join(root, "survived"))).rejects.toThrow();
+  });
+
+  test("successful hook shell exit drains unsupported background work", async () => {
+    if (process.platform === "win32") return;
+    const root = await fixture();
+    await writeFile(
+      join(root, "background.ts"),
+      `
+import { closeSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+closeSync(1); closeSync(2);
+writeFileSync("ready", String(process.pid));
+setTimeout(() => { writeFileSync("survived", "escaped"); }, 900);
+`,
+    );
+    const executable = "'" + process.execPath.replaceAll("'", "'\"'\"'") + "'";
+    const runner = await hooks(root, {
+      afterTool: [
+        {
+          name: "background",
+          command: `${executable} background.ts & while ! test -f ready; do sleep 0.01; done`,
+        },
+      ],
+    });
+    const reports = await runner.afterTool(call, { text: "completed" }, context(root));
+    expect(reports[0]!.status).toBe(process.platform === "linux" ? "success" : "failed");
+    if (process.platform !== "linux")
+      expect(reports[0]!.output).toContain("Background subprocesses were terminated");
+    // Child PIDs inside Linux belong to another namespace. The wrapper owns cleanup.
+    await Bun.sleep(950);
+    await expect(access(join(root, "survived"))).rejects.toThrow();
+  });
+
+  test("hook configuration rejects linked external files and parent directories", async () => {
+    const root = await fixture();
+    const external = await fixture();
+    const target = join(external, "hooks.json");
+    await writeFile(target, JSON.stringify({ version: 1 }));
+    await symlink(target, join(root, ".vcli/hooks.json"));
+    await expect(loadProjectHooks(root, new PermissionGate("yolo"))).rejects.toThrow();
+    await rm(join(root, ".vcli/hooks.json"));
+    await link(target, join(root, ".vcli/hooks.json"));
+    await expect(loadProjectHooks(root, new PermissionGate("yolo"))).rejects.toThrow("hard links");
+    await rm(join(root, ".vcli"), { recursive: true });
+    await symlink(external, join(root, ".vcli"));
+    await expect(loadProjectHooks(root, new PermissionGate("yolo"))).rejects.toThrow("symbolic");
   });
 
   test("rejects malformed and oversized configuration without silently skipping checks", async () => {

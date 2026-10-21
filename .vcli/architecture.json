@@ -55,6 +55,8 @@
     "The core has no terminal, provider SDK, or Bun-specific imports.",
     "Observed source and intended component boundaries remain separate graphs.",
     "One permission gate governs every executor; YOLO is the default.",
-    "Graphics, indexing, navigation and export are local operations with no model calls."
+    "Graphics, indexing, navigation and export are local operations with no model calls.",
+    "The CLI owns descriptor-rooted filesystem capabilities and mandatory native subprocess isolation; portable packages receive filesystem contracts through core.",
+    "Untrusted subprocesses work on bounded private snapshots; only the host reconciles authorized changes into the pinned workspace."
   ]
 }

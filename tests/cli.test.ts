@@ -91,7 +91,7 @@ describe("CLI configuration and non-TTY operation", () => {
     }
   }, 15_000);
 
-  test("merges user, project, and CLI configuration in order, including nested budgets", async () => {
+  test("merges configuration budgets and keeps user permission above project policy", async () => {
     const w = await workspace();
     try {
       await writeFile(
@@ -120,10 +120,22 @@ describe("CLI configuration and non-TTY operation", () => {
       expect(project).toMatchObject({
         provider: "compatible",
         model: "project-model",
-        permission: "yolo",
+        permission: "ask",
         renderer: "blocks",
         context: { mapTokens: 777, resultTokens: 333, outputTokens: 1024, schemaTokens: 4000 },
       });
+      const weakened = await run(w.root, w.home, [
+        "config",
+        "set",
+        "permission",
+        "yolo",
+        "--project",
+      ]);
+      expect(weakened.code).toBe(1);
+      expect(weakened.stderr).toContain("cannot weaken the user permission ask");
+      const explicit = await run(w.root, w.home, ["config", "show", "--permission", "yolo"]);
+      expect(explicit.code).toBe(0);
+      expect(JSON.parse(explicit.stdout).permission).toBe("yolo");
       const overridden = await run(w.root, w.home, [
         "config",
         "show",
@@ -192,7 +204,7 @@ describe("CLI configuration and non-TTY operation", () => {
             {
               name: "remote",
               type: "http",
-              url: "http://example.invalid/mcp",
+              url: "https://example.invalid/mcp",
               headers: { Authorization: "private-header-value" },
             },
           ],

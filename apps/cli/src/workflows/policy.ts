@@ -1,7 +1,8 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ToolCall, ToolContext } from "@vcli/core";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
+import { privateProjectPath } from "./private-path.ts";
 
 interface Rules {
   allow: string[];
@@ -40,33 +41,38 @@ export async function projectPath(
     : requested;
   if (!pathInside(root, path) || (!options.allowRoot && path === root))
     throw new Error("Path must remain inside the project workspace.");
-  const part = relative(root, path);
-  if (
-    part === ".vcli" ||
-    part.startsWith(`.vcli${sep}`) ||
-    part === ".git" ||
-    part.startsWith(`.git${sep}`)
-  )
+  const protectedPath = (candidate: string): boolean => {
+    return privateProjectPath(relative(root, candidate));
+  };
+  if (protectedPath(path))
     throw new Error("Agent tools cannot access protected project configuration or state.");
+  const components = relative(root, path).split(sep).filter(Boolean);
   let current = root;
-  for (const component of part.split(sep).filter(Boolean)) {
-    current = join(current, component);
+  for (let index = 0; index < components.length; index++) {
+    const candidate = join(current, components[index]!);
+    const final = index === components.length - 1;
     try {
-      const stat = await lstat(current);
+      const stat = await lstat(candidate);
       if (stat.isSymbolicLink()) throw new Error("Project paths cannot contain symbolic links.");
-      if (current !== path && !stat.isDirectory())
-        throw new Error("Path parent is not a directory.");
-      if (current === path && options.directory && !stat.isDirectory())
+      if (!final && !stat.isDirectory()) throw new Error("Path parent is not a directory.");
+      if (final && options.directory && !stat.isDirectory())
         throw new Error("Working directory must be an existing directory.");
-      if (current === path && !stat.isDirectory() && (!stat.isFile() || stat.nlink > 1))
+      if (final && !stat.isDirectory() && (!stat.isFile() || stat.nlink > 1))
         throw new Error("Project tools require regular files without hard links.");
+      // Real paths also normalize filesystem casing. Lexical casing alone is not an
+      // authorization identity on the default macOS/Windows filesystems.
+      current = await realpath(candidate);
+      if (!pathInside(root, current))
+        throw new Error("Path must remain inside the project workspace.");
+      if (protectedPath(current))
+        throw new Error("Agent tools cannot access protected project configuration or state.");
     } catch (error) {
       if (!missing(error)) throw error;
       if (options.directory) throw new Error("Working directory does not exist.");
-      break;
+      return join(current, ...components.slice(index));
     }
   }
-  return path;
+  return current;
 }
 
 function rules(value: unknown, name: string): Rules {
@@ -197,16 +203,15 @@ export class ProjectPolicy {
       throw new Error("Policy must be outside the mutable workspace.");
     if (canonical !== path)
       throw new Error("Policy path must be canonical without symbolic links.");
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const filesystem = new RootedFileSystem("/", {
+      canonicalRoot: true,
+      allowProtectedPaths: true,
+    });
     let raw: unknown;
     try {
-      if (!(await handle.stat()).isFile()) throw new Error("Policy must be a regular file.");
-      const buffer = Buffer.alloc(65_537);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      if (bytesRead > 65_536) throw new Error("Policy exceeds 64 KiB.");
-      raw = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
+      raw = JSON.parse(filesystem.readText(path, 65_536));
     } finally {
-      await handle.close();
+      filesystem.close();
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw))
       throw new Error("Invalid policy document.");

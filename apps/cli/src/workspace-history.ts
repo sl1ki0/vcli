@@ -9,7 +9,7 @@ export function createWorkspaceHistory(
 ): WorkspaceSessions {
   return {
     list: async () => {
-      const store = await SqliteSessionStore.open(root, options);
+      const store = await SqliteSessionStore.open(root, { ...options, readOnlySnapshot: true });
       try {
         return await store.summaries(root);
       } finally {
@@ -17,7 +17,7 @@ export function createWorkspaceHistory(
       }
     },
     open: async (id) => {
-      const store = await SqliteSessionStore.open(root, options);
+      const store = await SqliteSessionStore.open(root, { ...options, readOnlySnapshot: true });
       try {
         const session = await store.get(id);
         if (!session) throw new Error("That conversation could not be found.");

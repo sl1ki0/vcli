@@ -7,6 +7,12 @@ import type {
 } from "@vcli/core";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const DEFAULT_PROVIDER_ENDPOINTS = {
+  openai: "https://api.openai.com/v1",
+  openrouter: OPENROUTER_BASE_URL,
+  anthropic: "https://api.anthropic.com",
+  gemini: "https://generativelanguage.googleapis.com",
+} as const;
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "default",
   "none",
@@ -35,7 +41,7 @@ export type ProviderTransport = (
 export interface ProviderDependencies {
   /** Replaces only the SDK/network boundary; request mapping and normalization still run. */
   transport?: ProviderTransport;
-  /** Injectable HTTP boundary for the official OpenAI-compatible SDK. */
+  /** Injectable HTTP boundary for the official provider SDKs. */
   fetch?: typeof fetch;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
@@ -48,6 +54,52 @@ export class ProviderError extends Error {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+class ProviderResponseLimitError extends ProviderError {}
+
+/** Limit decoded bytes before provider SDKs buffer JSON, SSE frames, or error bodies. */
+export function boundedProviderFetch(
+  fetcher: typeof fetch = fetch,
+  maxBytes = 16 * 1024 * 1024,
+): typeof fetch {
+  return (async (input, init) => {
+    const response = await fetcher(input, init);
+    if (!response.body) return response;
+    const tooLarge = () =>
+      new ProviderResponseLimitError(
+        `Model response exceeded its ${maxBytes}-byte transport limit.`,
+      );
+    if (Number(response.headers.get("content-length")) > maxBytes) {
+      await response.body.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    const reader = response.body.getReader();
+    let bytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) return controller.close();
+          bytes += chunk.value.byteLength;
+          if (bytes > maxBytes) {
+            controller.error(tooLarge());
+            await reader.cancel().catch(() => undefined);
+            return;
+          }
+          controller.enqueue(chunk.value);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }) as typeof fetch;
 }
 
 export function object(value: unknown): WireObject {
@@ -160,6 +212,12 @@ export function adapter(
           return;
         } catch (error) {
           abort(signal);
+          // SDKs can wrap fetch failures as connection errors; a size violation is never retryable.
+          let cause: unknown = error;
+          for (let depth = 0; depth < 5; depth++) {
+            if (cause instanceof ProviderResponseLimitError) throw cause;
+            cause = object(cause).cause;
+          }
           if (error instanceof DOMException && error.name === "AbortError") throw error;
           if (attempt < 2 && !delivered && retryable(error)) {
             await (dependencies.sleep ?? delay)([250, 1000][attempt]!, signal);
@@ -185,22 +243,70 @@ export function adapter(
   };
 }
 
+/** Environment credentials must never follow an endpoint selected by a project. */
+export function credentialEnvironmentVariables(
+  config: Pick<ProviderConfig, "provider" | "baseURL">,
+): string[] {
+  const endpoint = (value: string): string => {
+    const url = new URL(value);
+    if (
+      !["https:", "http:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    )
+      throw new Error("Invalid credential endpoint");
+    return url.href.replace(/\/+$/, "");
+  };
+  try {
+    if (config.provider === "compatible") {
+      const bound = process.env.VCLI_COMPATIBLE_BASE_URL;
+      if (!config.baseURL || !bound || endpoint(config.baseURL) !== endpoint(bound)) return [];
+    } else if (
+      config.baseURL &&
+      endpoint(config.baseURL) !== endpoint(DEFAULT_PROVIDER_ENDPOINTS[config.provider])
+    )
+      return [];
+  } catch {
+    return [];
+  }
+  return config.provider === "gemini"
+    ? ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+    : config.provider === "anthropic"
+      ? ["ANTHROPIC_API_KEY"]
+      : config.provider === "openrouter"
+        ? ["OPENROUTER_API_KEY"]
+        : config.provider === "compatible"
+          ? ["VCLI_COMPATIBLE_API_KEY"]
+          : ["OPENAI_API_KEY"];
+}
+
+export function isLocalEndpoint(baseURL?: string): boolean {
+  if (!baseURL) return false;
+  try {
+    const url = new URL(baseURL);
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function apiKey(config: ProviderConfig): string {
-  const variables =
-    config.provider === "gemini"
-      ? ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
-      : config.provider === "anthropic"
-        ? ["ANTHROPIC_API_KEY"]
-        : config.provider === "openrouter"
-          ? ["OPENROUTER_API_KEY"]
-          : config.provider === "compatible"
-            ? ["VCLI_COMPATIBLE_API_KEY"]
-            : ["OPENAI_API_KEY"];
+  const variables = credentialEnvironmentVariables(config);
   const key = config.apiKey || variables.map((name) => process.env[name]).find(Boolean);
   if (key) return key;
   // Local/OpenAI-compatible services frequently run without authentication.
-  if (config.provider === "compatible" && config.baseURL) return "vcli-local";
-  throw new ProviderError(
-    `No ${config.provider} API key configured. Set ${variables[0]} or supply apiKey in the provider configuration.`,
-  );
+  if (config.provider === "compatible" && isLocalEndpoint(config.baseURL)) return "vcli-local";
+  const setup = variables.length
+    ? `Set ${variables[0]} or supply apiKey in the provider configuration.`
+    : "Supply an API key explicitly for this endpoint.";
+  throw new ProviderError(`No ${config.provider} API key configured. ${setup}`);
 }

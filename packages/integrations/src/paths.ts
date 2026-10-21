@@ -1,5 +1,6 @@
-import { access, realpath, readFile } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { openHostFileSystem } from "@vcli/core";
 
 export function validateName(name: unknown, label = "Name"): string {
   if (
@@ -55,8 +56,36 @@ export function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Bound untrusted metadata before parsing and refuse FIFOs/devices without blocking. */
+export async function readPackageText(
+  path: string,
+  limit = 1024 * 1024,
+  prefixOnly = false,
+): Promise<string> {
+  const filesystem = openHostFileSystem("/", { canonicalRoot: true, allowProtectedPaths: true });
+  try {
+    const absolute = resolve(path);
+    if (prefixOnly) return Buffer.from(filesystem.readPrefix(absolute, limit)).toString("utf8");
+    try {
+      return filesystem.readText(absolute, limit);
+    } catch (error) {
+      if (message(error).includes("byte limit"))
+        throw new Error(`Package content exceeds ${limit} bytes: ${path}`);
+      throw error;
+    }
+  } finally {
+    filesystem.close();
+  }
+}
+
 export async function readJson(path: string): Promise<Record<string, unknown>> {
-  return object(JSON.parse(await readFile(path, "utf8")), path);
+  const text = await readPackageText(path);
+  try {
+    return object(JSON.parse(text), path);
+  } catch {
+    // Parser errors may quote credentials embedded in invalid metadata.
+    throw new Error(`Invalid package JSON object: ${path}`);
+  }
 }
 
 export function message(error: unknown): string {

@@ -88,12 +88,37 @@ the affected server without coercing values; valid sibling skills remain usable.
 Damaged installed packages are disabled independently with a diagnostic, so healthy
 plugins remain available and chat can start. Reload revalidates repaired packages.
 Installation still rejects invalid package identities and manifests.
+Package placeholders can reference only declared package/workspace metadata;
+they cannot read ambient host environment variables. Unknown environment references
+disable that server, including references inside commands, arguments, environment,
+working directories, HTTP URLs and headers. Vendor `${NAME:-literal}` syntax uses
+the static fallback even when `NAME` exists on the host. Explicitly configured
+literal server environment/header values remain supported.
 Vendor trust flags cannot grant permissions. Unsupported vendor tool filters
 continue to disable the server rather than widen its declared access.
 
 Selected tools still pass normal argument validation, permissions and durable
 execution recording. Cancelled or uncertain effects are never automatically
 replayed. Package installation is a snapshot copy; dependencies are not installed.
+
+Stdio selects legacy negotiation so each configured program starts once;
+modern-only stdio requires future explicit protocol selection. HTTP retains
+modern/legacy negotiation. Decoded MCP HTTP bodies and aggregated discovery are
+capped at 8 MiB and discovery uses at most 64 pages. Package JSON/skill bodies are
+limited to 1 MiB; frontmatter reads use a 16 KiB prefix. Skill strings must resolve
+through the catalog, so model arguments cannot supply filesystem paths.
+
+External schemas are limited to 64 KiB, depth 32 and 1,024 expanded nodes. Only the
+supported draft-07 subset is accepted, with local acyclic references. Regex/format
+keywords, external/dynamic/cyclic references and unsupported dialect constraints
+produce diagnostics. Validators have isolated schema registries; malformed tools
+cannot poison valid siblings. Startup budgets count configured connections.
+Stdio servers use the host's mandatory native sandbox and a bounded workspace
+copy; fresh environments and package placeholders do not grant ambient secrets.
+HTTP endpoints remain explicit host network grants. See
+[native process boundaries](runtime.md#optional-external-policy).
+All discovered MCP operations, including resource listing and reads, retain
+external-action permissions and effect charges when the permission mode changes.
 
 ## Remaining work
 

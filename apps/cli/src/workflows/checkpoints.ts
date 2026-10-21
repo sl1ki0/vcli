@@ -1,18 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ToolCall, ToolContext, ToolResult } from "@vcli/core";
+import { projectPath } from "./policy.ts";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
+
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 interface FileState {
   exists: boolean;
@@ -44,47 +36,19 @@ function inside(root: string, path: string): boolean {
   return part !== "" && part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part);
 }
 
-/** Reject links in every path component, including local checkpoint storage. */
-async function checkPath(root: string, path: string): Promise<void> {
-  if (!inside(root, path)) throw new Error("Checkpoints require a file inside the project.");
-  let current = root;
-  for (const part of relative(root, path).split(sep)) {
-    current = join(current, part);
-    try {
-      const stat = await lstat(current);
-      if (stat.isSymbolicLink())
-        throw new Error(`Checkpoint path contains a symbolic link: ${current}`);
-      if (current !== path && !stat.isDirectory()) throw new Error(`Not a directory: ${current}`);
-    } catch (error) {
-      if (!absent(error)) throw error;
-      break;
-    }
-  }
-}
-
 async function snapshot(
   root: string,
   path: string,
 ): Promise<{ state: FileState; content?: Buffer }> {
-  await checkPath(root, path);
-  try {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink > 1)
-        throw new Error("Checkpoint requires a regular file without hard links.");
-      const content = await handle.readFile();
-      return {
-        state: { exists: true, digest: digest(content), mode: stat.mode & 0o7777 },
-        content,
-      };
-    } finally {
-      await handle.close();
-    }
-  } catch (error) {
-    if (!absent(error)) throw error;
-    return { state: { exists: false } };
-  }
+  if (!inside(root, path)) throw new Error("Checkpoints require a file inside the project.");
+  using filesystem = new RootedFileSystem(root, {
+    allowProtectedPaths: true,
+    canonicalRoot: true,
+  });
+  const value = filesystem.snapshot(path, MAX_FILE_BYTES);
+  return value
+    ? { state: { exists: true, digest: value.digest, mode: value.mode }, content: value.content }
+    : { state: { exists: false } };
 }
 
 function expectedContent(call: ToolCall, original: Buffer | undefined): Buffer {
@@ -116,7 +80,8 @@ export class CheckpointService {
 
   constructor(root: string) {
     this.launchRoot = resolve(root);
-    this.root = realpath(root);
+    using filesystem = new RootedFileSystem(root, { allowProtectedPaths: true });
+    this.root = Promise.resolve(filesystem.root);
   }
 
   async before(call: ToolCall, context: ToolContext): Promise<string | undefined> {
@@ -129,6 +94,7 @@ export class CheckpointService {
       : requested;
     if (path.startsWith(join(root, ".vcli") + sep))
       throw new Error("Checkpointed file edits cannot target vcli state or configuration.");
+    await projectPath(root, path, { write: true });
     const previous = await snapshot(root, path);
     const expected = expectedContent(call, previous.content);
     const checkpoint: Checkpoint = {
@@ -143,11 +109,16 @@ export class CheckpointService {
       expectedDigest: digest(expected),
     };
     const directory = await this.directory(true);
-    if (previous.content)
-      await writeFile(join(directory, `${checkpoint.id}.before`), previous.content, {
-        flag: "wx",
+    if (previous.content) {
+      using filesystem = new RootedFileSystem(root, {
+        allowProtectedPaths: true,
+        canonicalRoot: true,
+      });
+      filesystem.writeAtomic(join(directory, `${checkpoint.id}.before`), previous.content, {
+        expected: null,
         mode: 0o600,
       });
+    }
     await this.save(checkpoint);
     return checkpoint.id;
   }
@@ -177,7 +148,11 @@ export class CheckpointService {
     const directory = await this.directory(false);
     let names: string[];
     try {
-      names = await readdir(directory);
+      using filesystem = new RootedFileSystem(await this.root, {
+        allowProtectedPaths: true,
+        canonicalRoot: true,
+      });
+      names = filesystem.list(directory).map((entry) => entry.name);
     } catch (error) {
       if (absent(error)) return [];
       throw error;
@@ -201,36 +176,32 @@ export class CheckpointService {
       );
     }
     const root = await this.root;
-    const path = resolve(root, checkpoint.path);
+    const path = await projectPath(root, checkpoint.path, { write: true });
+    await context.authorizePath?.(path, true);
     const current = await snapshot(root, path);
     if (!matches(current.state, checkpoint.after))
       throw new Error(
         "File changed after this checkpoint. Restore refused to preserve external edits.",
       );
     context.signal.throwIfAborted();
+    using filesystem = new RootedFileSystem(root, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
     if (checkpoint.before.exists) {
       const backupPath = join(await this.directory(false), `${id}.before`);
       const backup = await snapshot(root, backupPath);
       if (!backup.content || digest(backup.content) !== checkpoint.before.digest)
         throw new Error("Checkpoint backup is missing or corrupt.");
-      // Prepare the complete replacement before touching the project file.
-      const temporary = join(dirname(path), `.vcli-restore-${randomUUID()}`);
-      try {
-        await writeFile(temporary, backup.content, { flag: "wx", mode: 0o600 });
-        await chmod(temporary, checkpoint.before.mode!);
-        const latest = await snapshot(root, path);
-        if (!matches(latest.state, checkpoint.after))
-          throw new Error("File changed during restore; no files restored.");
-        context.signal.throwIfAborted();
-        await rename(temporary, path);
-      } finally {
-        await rm(temporary, { force: true });
-      }
+      context.signal.throwIfAborted();
+      filesystem.writeAtomic(path, backup.content, {
+        expected: { digest: checkpoint.after.digest!, mode: checkpoint.after.mode },
+        mode: checkpoint.before.mode!,
+      });
     } else {
-      const latest = await snapshot(root, path);
-      if (!matches(latest.state, checkpoint.after))
-        throw new Error("File changed during restore; no files restored.");
-      await rm(path);
+      filesystem.delete(path, {
+        expected: { digest: checkpoint.after.digest!, mode: checkpoint.after.mode },
+      });
     }
     checkpoint.status = "restored";
     await this.save(checkpoint);
@@ -243,8 +214,12 @@ export class CheckpointService {
   private async directory(create: boolean): Promise<string> {
     const root = await this.root;
     const directory = join(root, ".vcli", "state", "checkpoints");
-    await checkPath(root, directory);
-    if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
+    using filesystem = new RootedFileSystem(root, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
+    if (create) filesystem.mkdir(directory, 0o700);
+    else filesystem.stat(directory);
     return directory;
   }
 
@@ -262,17 +237,18 @@ export class CheckpointService {
       !inside(root, resolve(root, value.path))
     )
       throw new Error("Invalid checkpoint metadata.");
+    await projectPath(root, value.path, { write: true });
     return value;
   }
 
   private async save(checkpoint: Checkpoint): Promise<void> {
     const directory = await this.directory(true);
-    const temporary = join(directory, `${checkpoint.id}.${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporary, JSON.stringify(checkpoint), { flag: "wx", mode: 0o600 });
-      await rename(temporary, join(directory, `${checkpoint.id}.json`));
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    using filesystem = new RootedFileSystem(await this.root, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
+    filesystem.writeAtomic(join(directory, `${checkpoint.id}.json`), JSON.stringify(checkpoint), {
+      mode: 0o600,
+    });
   }
 }

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { projectPath, type ProjectPolicy } from "./policy.ts";
+import type { ProjectPolicy } from "./policy.ts";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
+import { privateProjectPath } from "./private-path.ts";
 
 export interface JournalFile {
   digest: string;
@@ -36,23 +36,29 @@ export function changedFiles(left: JournalTree, right: JournalTree): string[] {
 
 /** Never follows links and never opens .vcli/config.json, even to compute a hash. */
 export async function captureTree(root: string, policy?: ProjectPolicy): Promise<JournalTree> {
+  using filesystem = new RootedFileSystem(root, { canonicalRoot: true });
   const tree: JournalTree = Object.create(null) as JournalTree;
   let bytes = 0;
   let files = 0;
-  async function visit(directory: string): Promise<void> {
-    const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+  let totalEntries = 0;
+  async function visit(directory: string, depth = 0): Promise<void> {
+    if (depth > 128) throw new Error("Project journal directory depth exceeds its limit.");
+    const entries = filesystem.list(directory, MAX_FILES);
     for (const entry of entries) {
+      if (++totalEntries > MAX_FILES)
+        throw new Error("Project journal snapshot exceeds its entry limit.");
+      if (privateProjectPath(entry.name)) continue;
       if (
-        JOURNAL_EXCLUDED_DIRECTORIES.has(entry.name) &&
-        (entry.isDirectory() || entry.isSymbolicLink())
+        JOURNAL_EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase()) &&
+        (entry.kind === "directory" || entry.kind === "symlink")
       )
         continue;
       // Environment credentials are not journal artifacts. Source and test files are never excluded.
-      if (entry.name === ".env" || entry.name.startsWith(".env.")) continue;
+      if (entry.name.toLowerCase() === ".env" || entry.name.toLowerCase().startsWith(".env."))
+        continue;
       const path = join(directory, entry.name);
       if (policy?.strict) {
-        if (entry.isDirectory()) {
+        if (entry.kind === "directory") {
           if (!(await policy.canTraverseDirectory(path))) continue;
         } else {
           try {
@@ -62,41 +68,32 @@ export async function captureTree(root: string, policy?: ProjectPolicy): Promise
           }
         }
       }
-      if (entry.isSymbolicLink()) {
-        const stat = await lstat(path);
+      if (entry.kind === "symlink") {
         tree[relative(root, path)] = {
-          digest: `link:${stat.ino}:${stat.mtimeMs}`,
-          mode: stat.mode,
+          digest: `link:${createHash("sha256").update(filesystem.readLink(path)).digest("hex")}`,
+          mode: 0o120777,
           bytes: "",
         };
         continue;
       }
-      if (entry.isDirectory()) {
-        await visit(path);
+      if (entry.kind === "directory") {
+        await visit(path, depth + 1);
         continue;
       }
-      if (!entry.isFile())
+      if (entry.kind !== "file")
         throw new Error(
           `Journal cannot snapshot a nonregular project entry: ${relative(root, path)}`,
         );
-      await projectPath(root, path);
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        const stat = await handle.stat();
-        if (!stat.isFile() || stat.nlink > 1)
-          throw new Error("Journal refuses linked or nonregular files.");
-        if (++files > MAX_FILES || bytes + stat.size > MAX_BYTES)
-          throw new Error("Project journal snapshot exceeds its file or byte limit.");
-        const content = await handle.readFile();
-        bytes += content.length;
-        tree[relative(root, path).split(sep).join("/")] = {
-          digest: createHash("sha256").update(content).digest("hex"),
-          mode: stat.mode & 0o7777,
-          bytes: content.toString("base64"),
-        };
-      } finally {
-        await handle.close();
-      }
+      if (++files > MAX_FILES)
+        throw new Error("Project journal snapshot exceeds its file or byte limit.");
+      const snapshot = filesystem.snapshot(path, MAX_BYTES - bytes);
+      if (!snapshot) throw new Error("Project changed while taking a journal snapshot.");
+      bytes += snapshot.content.length;
+      tree[relative(root, path).split(sep).join("/")] = {
+        digest: snapshot.digest,
+        mode: snapshot.mode,
+        bytes: snapshot.content.toString("base64"),
+      };
     }
   }
   await visit(root);

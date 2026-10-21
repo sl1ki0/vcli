@@ -32,6 +32,7 @@ export function createWorkspaceTerminal(options: TerminalOptions) {
         GOOGLE_API_KEY: "",
         OPENROUTER_API_KEY: "",
         VCLI_COMPATIBLE_API_KEY: "",
+        VCLI_COMPATIBLE_BASE_URL: "",
         VCLI_DEBUG: "",
         BUN_OPTIONS: "",
         BUN_BE_BUN: "",

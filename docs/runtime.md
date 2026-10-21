@@ -6,7 +6,11 @@ No separate homework command, execution engine or provider is needed.
 
 ## Install and run
 
-Install Bun 1.3.13, Bash, ripgrep and Python 3 for the example. From this repository:
+Install Bun 1.3.13, Bash, ripgrep and Python 3 for the example. Linux/WSL also
+requires root-owned, non-setuid `/usr/bin/bwrap` 0.12 or newer with `--disable-userns`,
+`/usr/bin/prlimit`, and working unprivileged user/PID/network namespaces. macOS
+requires `/usr/bin/sandbox-exec`; source runs need Xcode Command Line Tools to build
+the bundled supervisor. Compiled clients embed that helper. From this repository:
 
 ```sh
 bun install --frozen-lockfile
@@ -17,7 +21,13 @@ bun run dev run "Find and fix the failing tests" --root /path/to/project
 Choose a provider and model explicitly through setup. API keys remain in the
 credential store or environment, outside project settings. For a local compatible
 endpoint, use `--provider compatible --model <model> --endpoint <url>` and set
-`VCLI_COMPATIBLE_API_KEY`; the regular compatible provider supports tool calling.
+`VCLI_COMPATIBLE_API_KEY` together with a matching `VCLI_COMPATIBLE_BASE_URL`;
+the regular compatible provider supports tool calling. Vendor environment keys
+stay on canonical endpoints; saved credentials are endpoint-specific. Only exact
+loopback hosts (`localhost`, `127.0.0.1`, `::1`) permit keyless compatible access.
+Remote authless services need an intentional endpoint-specific placeholder key.
+Provider decoded responses, including streaming/error bodies, are capped at
+16 MiB and overflow is not retried automatically.
 
 The model chooses calls from JSON Schemas. `files_list`, `files_search` and
 `files_read` inspect the project; `files_patch` creates/replaces exact spans or
@@ -25,6 +35,10 @@ files; `files_delete` removes a regular file. `shell_run` executes Bash with an
 explicit `cwd`, timeout and output cap and returns stdout, stderr and exit code.
 Other tools are discovered through `tools_search`; full outputs are local
 artifacts. Invalid schemas are rejected before approval or execution.
+Native source/checkpoint reads are limited to 16 MiB. Commands and hooks drain
+remaining processes before reporting completion. Background work is unsupported:
+macOS reports supervisor failure and discards staged output; Linux destroys the
+PID namespace and retains the foreground exit status. No background child survives.
 
 ## Optional external policy
 
@@ -55,6 +69,10 @@ must match an exact allowed string and use simple syntax: no pipes, substitution
 redirects, nested shells or interpreter code arguments. MCP startup is disabled in
 this restricted profile. Configured command hooks obey the same command policy.
 The policy binding persists with the run and cannot be dropped on resume.
+Architecture inventory, compiler metadata and parent/explorer context scans apply
+directory rules before source reads. Scoped scans neither read nor replace the
+full-project cache. Git diff disables fsmonitor, external diff and text conversion;
+native ripgrep disables external configuration and preprocessors.
 
 | Mode                     | Read      | Write/Bash        | Deletion under strict policy |
 | ------------------------ | --------- | ----------------- | ---------------------------- |
@@ -62,8 +80,29 @@ The policy binding persists with the run and cannot be dropped on resume.
 | `yolo` (`auto`, default) | Immediate | Allowed by policy | Durable approval             |
 | `read-only` / Plan Mode  | Immediate | Denied            | Denied                       |
 
-Command allowlists are not OS process isolation: an allowed test program still
-runs with the user's rights. Use a disposable project without secrets.
+Shell commands, hooks and stdio MCP run in a mandatory OS sandbox: deny-default
+Seatbelt on macOS, or fresh mount/user/PID/network/IPC namespaces and seccomp on
+Linux/WSL. Missing facilities fail before the untrusted program starts. There is
+no unsandboxed fallback. Network access, including host loopback and Unix sockets,
+is denied. Explicit HTTP MCP endpoints use the host HTTP adapter.
+
+Programs receive a private, bounded source snapshot and a fresh HOME/environment.
+They do not receive provider keys or the live project. Private configuration,
+credentials, `.git` (except local read-only Git inspection), symlinks, hard links
+and generated dependency/build trees are excluded. Installed MCP packages are
+copied into separate read-only subtrees. Use relative project paths in commands.
+Package downloads, live network tests and nested macOS `posix_spawn` workflows
+are unsupported; Bash fork/exec commands remain available.
+
+The host imports finished changes through pinned directory descriptors, after
+checking every touched path against its original content/mode and current policy.
+A conflict rejects import; partial import failures require journal inspection.
+Cancellation discards the staged tree after descendants drain. Long-lived MCP
+requests reject modifications made between authorized requests. Snapshots are
+limited to 20,000 entries, depth 64, 64 MiB per file and 512 MiB in aggregate.
+Processes have descriptor, per-file size, CPU and process-count limits; these are
+not aggregate memory/disk quotas or a VM security boundary. See the
+[security audit](security-audit-2026-10-21.md) for the precise threat model.
 
 ## Plans, tasks and approvals
 
@@ -124,6 +163,29 @@ if any limit cannot cover a batch, none of its calls executes. Unknown outputs g
 a byte allowance and explicit incomplete markers when capped. Explorer requests,
 tool calls and output share the parent budget as well as its token allowance.
 Missing outcomes retain conservative charges.
+Unknown batch results reserve at least one byte before any call starts; execution
+allowances grow without consuming siblings' reserved bytes. Exceptions after a
+compound/mutating executor starts become uncertain. Partial model usage retains
+the conservative token reservation; invalid counters are rejected.
+
+Explicit user `context.taskTokens` and `runLimits` are ceilings for new runs.
+Projects may lower them but cannot raise or clear them, or weaken user `ask` and
+`read-only`. Prohibited project updates fail before saving; change the user setting
+to relax a persistent ceiling. Resumed runs retain their original resource limits.
+
+Session, task, plan, artifact and architecture I/O uses descriptor-rooted
+no-follow operations and atomic replacement with a new file inode. Root identities
+are retained across capabilities (at most 1,024 persistent root bindings per process;
+private disposable staging roots do not consume that registry). Session data and directories are private; a
+preexisting external `--state-dir` must already be private.
+
+SQLite runs entirely in memory. Every acknowledged save/event atomically persists
+a serialized SQLite snapshot (maximum 128 MiB), without opening database or sidecar
+pathnames in SQLite. One OS file lock permits one writer per store; history and
+artifact panels open read-only snapshots. A failed persistence poisons that writer
+until it is reopened. Legacy nonempty WAL/SHM/journal files are never discarded:
+close older clients and checkpoint/recover them using trusted SQLite first. Large
+histories incur snapshot-write cost on each durable event.
 
 Each side effect has a durable start and result. Completed call IDs return their
 saved results; reusing an ID with different arguments is a protocol error. After

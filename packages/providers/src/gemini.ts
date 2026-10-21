@@ -5,6 +5,8 @@ import {
   abort,
   adapter,
   apiKey,
+  boundedProviderFetch,
+  DEFAULT_PROVIDER_ENDPOINTS,
   count,
   metadata,
   object,
@@ -152,7 +154,12 @@ export function geminiProvider(config: ProviderConfig, dependencies: ProviderDep
       const { GoogleGenAI } = await import("@google/genai");
       client ??= new GoogleGenAI({
         apiKey: key,
-        httpOptions: { baseUrl: config.baseURL, retryOptions: { attempts: 1 } },
+        vertexai: false,
+        httpOptions: {
+          baseUrl: config.baseURL ?? DEFAULT_PROVIDER_ENDPOINTS.gemini,
+          retryOptions: { attempts: 1 },
+          fetch: boundedProviderFetch(dependencies.fetch),
+        },
       });
       const parameters = {
         ...request,

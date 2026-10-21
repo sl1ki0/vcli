@@ -15,6 +15,7 @@ export const inspectionTools: ToolDefinition[] = [
       const result = await executeProcess(
         "rg",
         [
+          "--no-config",
           "--files",
           "--hidden",
           "--glob",
@@ -28,6 +29,7 @@ export const inspectionTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read" },
       );
       const paths: string[] = [];
       for (const path of result.output.split("\n").filter(Boolean)) {
@@ -55,11 +57,15 @@ export const inspectionTools: ToolDefinition[] = [
     async execute(args, context) {
       if (args.path) await authorizeFilePath(context, args.path as string, false, true);
       let scope = args.path ? [args.path as string] : [];
-      if (context.authorizePath) {
+      {
         // Enumerate every requested scope; allowing a directory never allows its denied children.
+        // This also keeps protected configuration out when no external policy is configured.
         const listed = await executeProcess(
           "git",
           [
+            "--no-optional-locks",
+            "-c",
+            "core.fsmonitor=false",
             "--literal-pathspecs",
             "diff",
             "--no-ext-diff",
@@ -72,6 +78,7 @@ export const inspectionTools: ToolDefinition[] = [
           ],
           context,
           20_000,
+          { access: "read", allowGitRead: true },
         );
         if (listed.code !== 0) return { text: listed.output, isError: true };
         scope = [];
@@ -88,6 +95,9 @@ export const inspectionTools: ToolDefinition[] = [
       const result = await executeProcess(
         "git",
         [
+          "--no-optional-locks",
+          "-c",
+          "core.fsmonitor=false",
           "--no-pager",
           "--literal-pathspecs",
           "diff",
@@ -100,6 +110,7 @@ export const inspectionTools: ToolDefinition[] = [
         ],
         context,
         20_000,
+        { access: "read", allowGitRead: true },
       );
       return {
         text: boundText(result.output || "No changes.", 3000),

@@ -1,9 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import { constants, realpathSync } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, parse, resolve, sep } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { pathInside } from "./policy.ts";
+import { enforceUnixMode, RootedFileSystem } from "./rooted-filesystem.ts";
 
 function canonicalDestination(path: string): string {
   const remaining: string[] = [];
@@ -38,21 +38,13 @@ export class JournalStore {
   }
 
   private async prepare(): Promise<void> {
-    const root = parse(this.directory).root;
-    let current = root;
-    for (const part of this.directory.slice(root.length).split(sep).filter(Boolean)) {
-      current = join(current, part);
-      try {
-        await mkdir(current, { mode: 0o700 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      const stat = await lstat(current);
-      if (!stat.isDirectory() || stat.isSymbolicLink())
-        throw new Error("Journal directory cannot contain symbolic links.");
-    }
-    if ((await realpath(this.directory)) !== this.directory)
-      throw new Error("Journal directory must be canonical.");
+    using filesystem = new RootedFileSystem(parse(this.directory).root, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
+    filesystem.mkdir(this.directory, 0o700);
+    using directory = filesystem.openDirectory(this.directory);
+    enforceUnixMode(directory.fd, 0o700);
   }
 
   private path(id: string): string {
@@ -64,42 +56,22 @@ export class JournalStore {
   async read<T>(id: string): Promise<T | undefined> {
     await this.prepare();
     const path = this.path(id);
-    try {
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        if (!(await handle.stat()).isFile())
-          throw new Error("Journal record must be a regular file.");
-        return JSON.parse(await handle.readFile("utf8")) as T;
-      } finally {
-        await handle.close();
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      return undefined;
-    }
+    using filesystem = new RootedFileSystem(this.directory, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
+    // A bounded project snapshot may appear several times in a pending record.
+    const value = filesystem.snapshot(path, 1024 * 1024 * 1024);
+    return value ? (JSON.parse(value.content.toString("utf8")) as T) : undefined;
   }
 
   async write(id: string, document: unknown): Promise<void> {
     await this.prepare();
     const destination = this.path(id);
-    const temporary = join(dirname(destination), `.${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporary, JSON.stringify(document), { flag: "wx", mode: 0o600 });
-      const handle = await open(temporary, "r");
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(temporary, destination);
-      const directory = await open(this.directory, "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    using filesystem = new RootedFileSystem(this.directory, {
+      allowProtectedPaths: true,
+      canonicalRoot: true,
+    });
+    filesystem.writeAtomic(destination, JSON.stringify(document), { mode: 0o600 });
   }
 }

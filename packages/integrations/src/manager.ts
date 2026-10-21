@@ -1,12 +1,17 @@
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Plugin, PluginEcosystem } from "@vcli/core";
+import {
+  isPrivateProjectPath,
+  openHostFileSystem,
+  type Plugin,
+  type PluginEcosystem,
+} from "@vcli/core";
 import { loadPlugin, type LoadPluginOptions } from "./plugins.ts";
 import { loadSkill } from "./skills.ts";
 import { pluginFormat } from "./formats.ts";
-import { containedPath, exists, relativeSubdir, validateName } from "./paths.ts";
+import { containedPath, exists, readJson, relativeSubdir, validateName } from "./paths.ts";
 import { readMarketplaceCatalog, type MarketplaceEntry } from "./catalogs.ts";
 export type { MarketplaceEntry } from "./catalogs.ts";
 
@@ -60,11 +65,44 @@ async function git(args: string[], cwd?: string): Promise<string> {
 }
 
 async function copyPackage(source: string, destination: string): Promise<void> {
-  await cp(source, destination, {
-    recursive: true,
-    dereference: false,
-    filter: (path) => ![".git", "node_modules"].includes(basename(path)),
-  });
+  destination = join(await realpath(dirname(destination)), basename(destination));
+  const filesystem = openHostFileSystem("/", { canonicalRoot: true, allowProtectedPaths: true });
+  let entries = 0;
+  let bytes = 0;
+  try {
+    filesystem.mkdir(destination);
+    const target = openHostFileSystem(destination, {
+      canonicalRoot: true,
+      allowProtectedPaths: true,
+    });
+    try {
+      const copy = (directory: string, depth: number): void => {
+        if (depth > 64) throw new Error("Plugin package exceeds its directory depth limit");
+        for (const entry of filesystem.list(join(source, directory), 20_000 - entries)) {
+          if (++entries > 20_000) throw new Error("Plugin package exceeds its entry limit");
+          const path = directory === "." ? entry.name : `${directory}/${entry.name}`;
+          if (entry.name === "node_modules" || isPrivateProjectPath(path)) continue;
+          const from = join(source, path);
+          if (entry.kind === "directory") {
+            target.mkdir(path);
+            copy(path, depth + 1);
+          } else if (entry.kind === "file") {
+            const mode = filesystem.stat(from)?.mode;
+            const content = filesystem.readBytes(from, 64 * 1024 * 1024);
+            bytes += content.byteLength;
+            if (bytes > 128 * 1024 * 1024)
+              throw new Error("Plugin package exceeds its snapshot byte limit");
+            target.writeAtomic(path, content, { mode: (mode ?? 0o600) & 0o755 });
+          } else throw new Error("Plugin packages cannot contain symbolic links or special files");
+        }
+      };
+      copy(".", 0);
+    } finally {
+      target.close();
+    }
+  } finally {
+    filesystem.close();
+  }
 }
 
 async function acquire(
@@ -134,7 +172,9 @@ export class PluginManager {
   private async state(): Promise<State> {
     const path = join(this.stateRoot, "integrations.json");
     if (!(await exists(path))) return { version: 1, plugins: [], marketplaces: [] };
-    const value = JSON.parse(await readFile(path, "utf8")) as State;
+    const value = (await readJson(
+      join(await realpath(this.stateRoot), "integrations.json"),
+    )) as unknown as State;
     if (value.version !== 1 || !Array.isArray(value.plugins) || !Array.isArray(value.marketplaces))
       throw new Error("Invalid integrations state");
     for (const plugin of value.plugins) validateName(plugin.name);

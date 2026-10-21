@@ -83,6 +83,11 @@ Before-hook failure blocks the tool. After-hook failure is reported alongside th
 
 ## Discovery and review
 
+Native Git/ripgrep reads disable fsmonitor, external diff, text conversion and
+ripgrep configuration/preprocessors. Memory and workflow state reject links and
+special files. Checkpoint restore rechecks current directory policy. CLI approval
+shows complete arguments with literal terminal controls, including long command tails.
+
 Use `tools_search` to expose workflow tool schemas only when needed. The initial tool schema budget remains 4,000 estimated tokens. Local tool discovery continues to work in plan/read-only mode without starting configured MCP servers. `files_list` supports a ripgrep glob; `git_diff` reviews staged or unstaged changes with external diff programs and text conversion disabled. Large outputs retain artifact handles instead of filling model context.
 
 Tool requests, results and errors also remain in the chat as expandable cards.

@@ -165,7 +165,7 @@ describe("invalid tool request limiter", () => {
     ]);
     f.options.executeTool = async () => {
       f.counts.wrappers++;
-      throw new Error("Execution failed");
+      return { text: "Execution failed", isError: true };
     };
     f.options.permissions = new PermissionGate("ask", async () => {
       f.counts.approvals++;

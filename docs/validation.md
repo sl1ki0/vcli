@@ -26,6 +26,42 @@ passed on macOS and Linux with all 204 tests, native builds, the existing termin
 smoke checks, and the new packaged plan/resume/build/task/checkpoint workflow.
 Both `vcli-macOS-ARM64` and `vcli-Linux-X64` artifacts were uploaded successfully.
 
+## Security audit, 2026-10-21
+
+The local macOS arm64 security revision passes **456 tests with 2,568 assertions
+across 50 files**, compared with the reverified 358-test/2,075-assertion baseline.
+Frozen installation, Prettier, ESLint, strict TypeScript and architecture drift
+checks pass. Native build and standalone smoke pass outside the checkout,
+including source/compiled PTY flows, worker/font, graphics, session restoration,
+approval decisions, cancellation, terminal cleanup and capped file descriptors.
+The offline benchmark was regenerated without paid model calls.
+
+Regression fixtures cover credential destination binding, project permission and
+spending ceilings, case aliases, denied architecture source in parent/explorer
+context, read-tool subprocess injection, links/FIFOs, state permissions,
+checkpoint policy, uncertain effects, process lifetime, output/usage reservations,
+task identity, MCP schema CPU restrictions, single stdio startup and bounded
+MCP/provider response decoding. See the [audit findings and limits](security-audit-2026-10-21.md).
+
+The follow-up adds mandatory Seatbelt/bubblewrap isolation, staged shell/hooks/MCP
+workspaces, descriptor-rooted filesystem access and memory-only SQLite with atomic
+persistence. Native regressions exercise actual outside-file/socket attempts,
+immutable process groups, mount descriptor escape attempts, read-only package
+hard-link aliases, conflicting imports and delayed MCP writes. See
+[the follow-up threat model and platform limits](security-audit-2026-10-21.md#native-isolation-and-filesystem-follow-up).
+The final 524-test suite passes on both tested platforms: macOS arm64 has
+**522 pass, 2 platform skips, 0 fail, 2,970 assertions**; Linux arm64 has
+**520 pass, 4 platform skips, 0 fail, 3,350 assertions**, across 58 files.
+The skips are platform-specific supervisor/Python or Linux descriptor tests.
+The reproduced Linux PTY persistence failure also passes 20 consecutive runs
+after bounded EINTR handling and inspection of interrupted directory creation.
+Fresh-process tests prevent runtime PATH shims from granting private files;
+raw MCP settings reject non-HTTP(S) destinations before fetch. Redirect and
+auth-challenge fixtures deliver no body or credential header to a second origin.
+Seroval remains pinned to 1.6.3. Updating `typescript-eslint` to 8.72.0 removes the
+vulnerable Braces dependency chain; `bun audit` now reports no vulnerabilities.
+Offline fixtures do not establish live provider availability.
+
 ## Ordinary runtime and command revision, 2026-10-20
 
 `tests/run-acceptance.test.ts` exercises the production harness, compatible SDK

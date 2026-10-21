@@ -1,10 +1,16 @@
 import { mkdir, copyFile, readdir, readFile, writeFile, realpath } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import solidPlugin from "@opentui/solid/bun-plugin";
+import { prepareProcessSupervisor } from "../apps/cli/src/workflows/process-supervisor.ts";
 
 const root = resolve(import.meta.dir, "..");
 const output = resolve(root, "dist/vcli");
 await mkdir(resolve(root, "dist"), { recursive: true });
+// Standalone clients carry their native supervisor and never require a runtime compiler.
+const supervisorBase64 =
+  process.platform === "darwin"
+    ? (await readFile(await prepareProcessSupervisor())).toString("base64")
+    : undefined;
 const result = await Bun.build({
   entrypoints: [
     resolve(root, "apps/cli/src/index.ts"),
@@ -13,7 +19,10 @@ const result = await Bun.build({
   root,
   target: "bun",
   conditions: ["bun"],
-  define: { "process.env.OPENTUI_LIBC": JSON.stringify(process.env.OPENTUI_LIBC ?? "glibc") },
+  define: {
+    "process.env.OPENTUI_LIBC": JSON.stringify(process.env.OPENTUI_LIBC ?? "glibc"),
+    __VCLI_PROCESS_SUPERVISOR_BASE64__: JSON.stringify(supervisorBase64) ?? "undefined",
+  },
   plugins: [solidPlugin],
   compile: {
     outfile: output,

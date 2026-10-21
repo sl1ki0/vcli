@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
-import { open } from "node:fs/promises";
-import { join } from "node:path";
+import { executeProcess } from "./process.ts";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
 import type { PermissionGate } from "@vcli/core";
 import { type ToolCall, type ToolContext, type ToolDefinition, type ToolResult } from "@vcli/core";
 
@@ -87,70 +86,24 @@ async function executeHook(
   context: ToolContext,
 ): Promise<HookReport> {
   context.signal.throwIfAborted();
-  return new Promise((resolve) => {
-    const child = spawn("/bin/sh", ["-c", hook.command], {
-      cwd: context.root,
-      env: process.env,
-      detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let status: HookReport["status"] = "success";
-    let bytes = 0;
-    let truncated = false;
-    const chunks: Buffer[] = [];
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    const kill = (signal: NodeJS.Signals) => {
-      try {
-        if (child.pid && process.platform !== "win32") process.kill(-child.pid, signal);
-        else child.kill(signal);
-      } catch {
-        /* The process may already have exited. */
-      }
-    };
-    const stop = () => {
-      kill("SIGTERM");
-      killTimer ??= setTimeout(() => kill("SIGKILL"), 250);
-    };
-    const abort = () => {
-      status = "aborted";
-      stop();
-    };
-    const timer = setTimeout(() => {
-      status = "timeout";
-      stop();
-    }, hook.timeoutMs);
-    context.signal.addEventListener("abort", abort, { once: true });
-    if (context.signal.aborted) abort();
-    const collect = (chunk: Buffer) => {
-      const room = OUTPUT_BYTES - bytes;
-      if (room > 0) {
-        const part = chunk.subarray(0, room);
-        chunks.push(part);
-        bytes += part.length;
-      }
-      if (chunk.length > room) truncated = true;
-    };
-    const finish = (code: number | null, error?: Error) => {
-      clearTimeout(timer);
-      clearTimeout(killTimer);
-      context.signal.removeEventListener("abort", abort);
-      if (status === "success" && (code !== 0 || error)) status = "failed";
-      resolve({
-        name: hook.name,
-        event,
-        status,
-        output: error?.message ?? Buffer.concat(chunks).toString("utf8"),
-        truncated,
-      });
-    };
-    child.stdout.on("data", collect);
-    child.stderr.on("data", collect);
-    child.once("error", (error) => finish(null, error));
-    child.once("close", (code) => finish(code));
-    // A hook may finish without consuming stdin. EPIPE is not a hook failure.
-    child.stdin.on("error", () => {});
-    child.stdin.end(payload);
+  const result = await executeProcess("/bin/sh", ["-c", hook.command], context, hook.timeoutMs, {
+    access: "write",
+    outputLimitBytes: OUTPUT_BYTES,
+    stdin: (root) => {
+      const input = JSON.parse(payload) as Record<string, unknown>;
+      input.root = root;
+      return JSON.stringify(input);
+    },
   });
+  let output = Buffer.from(result.output).subarray(0, OUTPUT_BYTES).toString("utf8");
+  while (Buffer.byteLength(output) > OUTPUT_BYTES) output = output.slice(0, -1);
+  return {
+    name: hook.name,
+    event,
+    status: result.timedOut ? "timeout" : result.code === 0 ? "success" : "failed",
+    output,
+    truncated: result.truncated || output !== result.output,
+  };
 }
 
 /** Commands are local vcli hooks, not compatible with vendor-specific hook protocols. */
@@ -241,24 +194,13 @@ export async function loadProjectHooks(
   permissions: PermissionGate,
   preflight?: (command: string, context: ToolContext) => Promise<void>,
 ): Promise<ProjectHooks> {
-  let handle;
-  try {
-    handle = await open(join(root, ".vcli/hooks.json"), "r");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return new ProjectHooks({ beforeTool: [], afterTool: [] }, permissions, preflight);
-  }
-  try {
-    if (!(await handle.stat()).isFile()) throw new Error("hooks.json must be a regular file.");
-    const buffer = Buffer.alloc(CONFIG_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > CONFIG_BYTES) throw new Error("hooks.json exceeds 64 KiB.");
-    return new ProjectHooks(
-      parseHooks(JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"))),
-      permissions,
-      preflight,
-    );
-  } finally {
-    await handle.close();
-  }
+  using filesystem = new RootedFileSystem(root, { allowProtectedPaths: true });
+  const snapshot = filesystem.snapshot(".vcli/hooks.json", CONFIG_BYTES + 1);
+  if (!snapshot) return new ProjectHooks({ beforeTool: [], afterTool: [] }, permissions, preflight);
+  if (snapshot.content.byteLength > CONFIG_BYTES) throw new Error("hooks.json exceeds 64 KiB.");
+  return new ProjectHooks(
+    parseHooks(JSON.parse(snapshot.content.toString("utf8"))),
+    permissions,
+    preflight,
+  );
 }

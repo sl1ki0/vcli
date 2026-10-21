@@ -1,21 +1,34 @@
-import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { ArchitectureEdge, ArchitectureGraph, ArchitectureNode } from "@vcli/core";
+import { openHostFileSystem } from "@vcli/core";
+import type {
+  ArchitectureEdge,
+  ArchitectureGraph,
+  ArchitectureNode,
+  ArchitectureScanScope,
+} from "@vcli/core";
 import { findCycles, graphRevision } from "./graph.ts";
 import { inventory, JS_SOURCE } from "./scan-inventory.ts";
 import { readPackages } from "./scan-packages.ts";
 import { resolveImports } from "./scan-resolution.ts";
-import { collectSyntaxFacts, loadCache, persistCache } from "./scan-syntax.ts";
+import { CACHE_VERSION, collectSyntaxFacts, loadCache, persistCache } from "./scan-syntax.ts";
 import { compare, hash } from "./utils.ts";
 
-export async function scan(rootPath: string): Promise<ArchitectureGraph> {
+export async function scan(
+  rootPath: string,
+  scope?: ArchitectureScanScope,
+): Promise<ArchitectureGraph> {
   const started = performance.now();
-  const root = resolve(rootPath);
-  if (!(await stat(root)).isDirectory())
-    throw new Error(`Architecture root is not a directory: ${root}`);
+  // Preserve the launch alias in the host's identity binding. Canonicalizing
+  // first would let a replaced root symlink become a newly approved directory.
+  const filesystem = openHostFileSystem(rootPath);
+  const root = filesystem.root;
+  filesystem.close();
   const diagnostics: string[] = [];
-  const paths = await inventory(root, diagnostics);
-  const previousCache = await loadCache(root, diagnostics);
+  const paths = await inventory(root, diagnostics, scope);
+  // A full-project cache may contain denied source facts. Scoped scans neither read nor replace it.
+  const previousCache = scope
+    ? { version: CACHE_VERSION, root, files: {} }
+    : await loadCache(root, diagnostics);
   const packages = await readPackages(root, paths, diagnostics);
   const syntax = await collectSyntaxFacts(root, paths, previousCache, diagnostics);
   const nodes: ArchitectureNode[] = [...packages.nodes];
@@ -57,10 +70,11 @@ export async function scan(rootPath: string): Promise<ArchitectureGraph> {
     nodes,
     edges,
     diagnostics,
+    scope ? new Set(paths.map((path) => resolve(root, path))) : undefined,
   );
   nodes.sort((a, b) => compare(a.id, b.id));
   edges.sort((a, b) => compare(a.id, b.id));
-  if (JSON.stringify(previousCache) !== JSON.stringify(syntax.cache))
+  if (!scope && JSON.stringify(previousCache) !== JSON.stringify(syntax.cache))
     await persistCache(syntax.cache, diagnostics);
   const salt = JSON.stringify({
     files: Object.entries(syntax.cache.files).map(([path, record]) => [path, record.hash]),

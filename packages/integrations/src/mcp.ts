@@ -6,10 +6,13 @@ import {
   type ReadResourceResult,
   type Resource,
   type Tool,
+  type Transport,
 } from "@modelcontextprotocol/client";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import type { NormalizedMcpServer, ToolDefinition, ToolResult } from "@vcli/core";
-import { message, validateServerName } from "./paths.ts";
+import { message } from "./paths.ts";
+import { validateMcpInputSchema } from "./mcp-schema.ts";
+import { validateMcpServer } from "./mcp-validation.ts";
 
 export interface McpConnection {
   listTools(signal?: AbortSignal): Promise<Tool[]>;
@@ -26,11 +29,72 @@ export type McpConnector = (
   server: NormalizedMcpServer,
   signal?: AbortSignal,
 ) => Promise<McpConnection>;
+/** The CLI owns subprocess policy; integrations must never start an unconfined server. */
+export type McpTransport = Transport;
+export interface McpStdioTransportOptions {
+  maxResponseBytes: number;
+  onDiagnostic?: (text: string) => void;
+}
+export type McpStdioTransportFactory = (
+  server: NormalizedMcpServer,
+  options: McpStdioTransportOptions,
+) => McpTransport;
 export interface McpManagerOptions {
   connector?: McpConnector;
+  stdioTransport?: McpStdioTransportFactory;
   timeoutMs?: number;
   resultChars?: number;
+  /** Hard cap on decoded wire bodies and aggregated discovery lists. */
+  maxResponseBytes?: number;
   onDiagnostic?: (text: string) => void;
+}
+
+const DEFAULT_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/** Cap decoded HTTP bytes before SDK JSON/SSE parsing or error-body buffering. */
+function boundedFetch(maxBytes: number, onLimit: (error: Error) => void): typeof fetch {
+  return (async (input, init) => {
+    const response = await fetch(input, init);
+    if (!response.body) return response;
+    const tooLarge = () => {
+      const error = new Error(`MCP response exceeded ${maxBytes} bytes`);
+      onLimit(error);
+      return error;
+    };
+    const declared = Number(response.headers.get("content-length"));
+    if (declared > maxBytes) {
+      await response.body.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    const reader = response.body.getReader();
+    let bytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            controller.close();
+            return;
+          }
+          bytes += chunk.value.byteLength;
+          if (bytes > maxBytes) {
+            controller.error(tooLarge());
+            await reader.cancel().catch(() => undefined);
+            return;
+          }
+          controller.enqueue(chunk.value);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }) as typeof fetch;
 }
 
 async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -92,29 +156,42 @@ export function mcpResult(result: CallToolResult | ReadResourceResult, limit = 8
 function sdkConnector(options: McpManagerOptions): McpConnector {
   return async (server, signal) => {
     const timeout = options.timeoutMs ?? 15_000;
+    const maxBytes = options.maxResponseBytes ?? DEFAULT_RESPONSE_BYTES;
     const client = new Client(
       { name: "vcli", version: "0.1.0" },
       {
         capabilities: {},
-        versionNegotiation: {
-          mode: "auto",
-          probe: { timeoutMs: Math.min(timeout, 3000), maxRetries: 0 },
+        jsonSchemaValidator: {
+          // SDK output validators need the same per-tool schema namespace isolation as inputs.
+          getValidator: (schema) => new AjvJsonSchemaValidator().getValidator(schema),
         },
+        // Auto-negotiation launches a disposable stdio sibling and executes startup twice.
+        versionNegotiation:
+          server.type === "stdio"
+            ? { mode: "legacy" }
+            : {
+                mode: "auto",
+                probe: { timeoutMs: Math.min(timeout, 3000), maxRetries: 0 },
+              },
         inputRequired: { autoFulfill: false },
         listMaxPages: 64,
       },
     );
+    if (server.type === "stdio" && !options.stdioTransport)
+      throw new Error("MCP stdio requires a system-isolated transport supplied by the host");
     const transport =
       server.type === "stdio"
-        ? new StdioClientTransport({
-            command: server.command!,
-            args: server.args,
-            cwd: server.cwd,
-            env: { ...getDefaultEnvironment(), ...server.env },
-            stderr: "pipe",
+        ? options.stdioTransport!(server, {
+            maxResponseBytes: maxBytes,
+            onDiagnostic: (text) => options.onDiagnostic?.(`${server.name}: ${text}`),
           })
         : new StreamableHTTPClientTransport(new URL(server.url!), {
             requestInit: { headers: server.headers, redirect: "error" },
+            fetch: boundedFetch(maxBytes, (error) => {
+              options.onDiagnostic?.(`${server.name}: ${error.message}`);
+              // SSE parsers can report a stream error without settling the pending RPC.
+              void client.close().catch(() => undefined);
+            }),
             redirectPolicy: "same-origin",
             reconnectionOptions: {
               maxRetries: 0,
@@ -125,10 +202,6 @@ function sdkConnector(options: McpManagerOptions): McpConnector {
             onInsufficientScope: "throw",
             maxStepUpRetries: 0,
           });
-    if (transport instanceof StdioClientTransport)
-      transport.stderr?.on("data", (chunk) =>
-        options.onDiagnostic?.(`${server.name}: ${String(chunk).slice(0, 4096)}`),
-      );
     client.onerror = (error) => options.onDiagnostic?.(`${server.name}: ${error.message}`);
     try {
       await client.connect(transport, { signal, timeout });
@@ -136,15 +209,41 @@ function sdkConnector(options: McpManagerOptions): McpConnector {
       await client.close().catch(() => undefined);
       throw error;
     }
+    // Walk pages ourselves so individually bounded pages cannot form an oversized aggregate.
+    const list = async <T>(
+      method: "tools/list" | "resources/list",
+      items: "tools" | "resources",
+      signal?: AbortSignal,
+    ): Promise<T[]> => {
+      const output: T[] = [];
+      let cursor: string | undefined;
+      let bytes = 0;
+      const cursors = new Set<string>();
+      for (let page = 0; page < 64; page++) {
+        const result = await client.request(
+          { method, ...(cursor !== undefined ? { params: { cursor } } : {}) },
+          { signal, timeout },
+        );
+        bytes += Buffer.byteLength(JSON.stringify(result));
+        if (bytes > maxBytes) throw new Error(`MCP ${method} exceeded ${maxBytes} bytes`);
+        output.push(...((result as unknown as Record<string, T[]>)[items] ?? []));
+        const next = "nextCursor" in result ? result.nextCursor : undefined;
+        if (next === undefined) return output;
+        if (typeof next !== "string" || cursors.has(next))
+          throw new Error(`MCP ${method} returned an invalid/repeated cursor`);
+        cursors.add(next);
+        cursor = next;
+      }
+      throw new Error(`MCP ${method} exceeded 64 pages`);
+    };
     return {
-      listTools: async (signal) => (await client.listTools(undefined, { signal, timeout })).tools,
+      listTools: (signal) => list<Tool>("tools/list", "tools", signal),
       callTool: (tool, args, signal) =>
         client.callTool(
           { name: tool.name, arguments: args },
           { signal, timeout, toolDefinition: tool },
         ),
-      listResources: async (signal) =>
-        (await client.listResources(undefined, { signal, timeout })).resources,
+      listResources: (signal) => list<Resource>("resources/list", "resources", signal),
       readResource: (uri, signal) => client.readResource({ uri }, { signal, timeout }),
       close: () => client.close(),
     };
@@ -163,16 +262,23 @@ export class McpManager {
     servers: readonly NormalizedMcpServer[] = [],
     private readonly options: McpManagerOptions = {},
   ) {
+    if (
+      options.maxResponseBytes !== undefined &&
+      (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)
+    )
+      throw new Error("MCP maxResponseBytes must be a positive safe integer");
     this.connector = options.connector ?? sdkConnector(options);
     for (const server of servers) {
-      for (const name of server.name.split(".")) validateServerName(name);
+      validateMcpServer(server);
       if (this.servers.has(server.name))
         throw new Error(`Duplicate MCP server namespace: ${server.name}`);
-      if (server.type === "stdio" && !server.command)
-        throw new Error(`MCP server ${server.name} needs a command`);
-      if (server.type === "http" && !server.url)
-        throw new Error(`MCP server ${server.name} needs a URL`);
-      this.servers.set(server.name, server);
+      // Keep the validated grant stable if the caller later edits its config object.
+      this.servers.set(server.name, {
+        ...server,
+        ...(server.args ? { args: [...server.args] } : {}),
+        ...(server.env ? { env: { ...server.env } } : {}),
+        ...(server.headers ? { headers: { ...server.headers } } : {}),
+      });
     }
   }
 
@@ -253,7 +359,7 @@ export class McpManager {
         name: toolName(server, "@resources.list"),
         description: `List resources available from MCP server ${server}`,
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        kind: "read",
+        kind: "execute",
         eager: false,
         execute: async (_, context) => {
           const resources = await this.listResources(server, context.signal);
@@ -270,7 +376,7 @@ export class McpManager {
           required: ["uri"],
           additionalProperties: false,
         },
-        kind: "read",
+        kind: "execute",
         eager: false,
         execute: (args, context) => this.readResource(server, String(args.uri), context.signal),
       },
@@ -294,6 +400,15 @@ export class McpManager {
         continue;
       }
       seen.add(tool.name);
+      try {
+        validateMcpInputSchema(tool.inputSchema);
+        if (tool.outputSchema) validateMcpInputSchema(tool.outputSchema);
+      } catch (error) {
+        this.report(
+          `MCP ${server}: skipped unsupported schema for ${tool.name}: ${message(error)}`,
+        );
+        continue;
+      }
       definitions.push(this.toolDefinition(server, tool));
     }
     return [...definitions, ...this.resourceDefinitions(server)];

@@ -12,5 +12,14 @@ export {
   type McpConnection,
   type McpConnector,
   type McpManagerOptions,
+  type McpTransport,
+  type McpStdioTransportFactory,
+  type McpStdioTransportOptions,
 } from "./mcp.ts";
+export {
+  deserializeMessage as decodeMcpMessage,
+  serializeMessage as encodeMcpMessage,
+  type JSONRPCMessage as McpRpcMessage,
+} from "@modelcontextprotocol/client";
 export { pluginFormat, pluginFormats, type PluginFormat } from "./formats.ts";
+export { validateMcpServer } from "./mcp-validation.ts";

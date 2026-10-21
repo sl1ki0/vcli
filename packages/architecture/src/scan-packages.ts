@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { ArchitectureNode } from "@vcli/core";
 import { compare, slash } from "./utils.ts";
+import { readArchitectureFile } from "./state-path.ts";
+import { ArchitectureScanLimitError } from "./scan-limits.ts";
 
 export interface Manifest {
   path: string;
@@ -22,10 +23,14 @@ export async function readPackages(
   diagnostics: string[],
 ): Promise<PackageIndex> {
   const manifests: Manifest[] = [];
+  let manifestBytes = 0;
   for (const path of paths.filter((p) => basename(p) === "package.json")) {
     try {
-      const text = await readFile(join(root, path), "utf8"),
-        value: unknown = JSON.parse(text);
+      const text = await readArchitectureFile(root, join(root, path), 1024 * 1024);
+      manifestBytes += Buffer.byteLength(text);
+      if (manifestBytes > 16 * 1024 * 1024)
+        throw new ArchitectureScanLimitError("Architecture scan package metadata exceeds 16 MiB.");
+      const value: unknown = JSON.parse(text);
       if (!value || typeof value !== "object" || Array.isArray(value))
         throw new Error("expected an object");
       manifests.push({
@@ -35,6 +40,7 @@ export async function readPackages(
         text,
       });
     } catch (error) {
+      if (error instanceof ArchitectureScanLimitError) throw error;
       diagnostics.push(`${path}: ${(error as Error).message}`);
     }
   }

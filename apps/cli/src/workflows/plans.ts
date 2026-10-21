@@ -1,6 +1,5 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { RunPlanState, Session } from "@vcli/core";
+import { storageFilesystem, storagePath } from "./state-path.ts";
 
 const statusLabel = { pending: "○", "in-progress": "◐", complete: "✓" } as const;
 
@@ -63,25 +62,26 @@ export async function savePlan(
     ?.filter((message) => message.role === "assistant" && message.text.trim())
     .at(-1);
   if (!session.plan && !response) return;
-  const directory = join(options.directory ?? join(root, ".vcli/state"), "plans");
-  await mkdir(directory, { recursive: true });
-  const path = join(directory, `${session.id}.md`);
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  await writeFile(
-    temporary,
+  if (!/^[\w.-]+$/.test(session.id)) throw new Error("Invalid plan run ID.");
+  const parts = options.directory ? ["plans"] : ["state", "plans"];
+  const path = (name?: string) =>
+    storagePath(root, name ? [...parts, name] : parts, options.directory);
+  using filesystem = storageFilesystem(await path(), true);
+  await path(`${session.id}.md`);
+  if (session.plan) await path(`${session.id}.json`);
+  const write = async (name: string, content: string) => {
+    await path(name);
+    filesystem.writeAtomic(name, content, { mode: 0o600 });
+  };
+  await write(
+    `${session.id}.md`,
     session.plan ? formatRunPlan(session.plan, session.id) : response!.text,
-    {
-      mode: 0o600,
-    },
   );
-  await rename(temporary, path);
   if (session.plan) {
-    const structured = join(directory, `${session.id}.json`);
-    const pending = `${structured}.${crypto.randomUUID()}.tmp`;
-    await writeFile(pending, JSON.stringify({ runId: session.id, plan: session.plan }, null, 2), {
-      mode: 0o600,
-    });
-    await rename(pending, structured);
+    await write(
+      `${session.id}.json`,
+      JSON.stringify({ runId: session.id, plan: session.plan }, null, 2),
+    );
   }
 }
 
@@ -91,20 +91,32 @@ export async function readPlans(
   options: { directory?: string } = {},
 ): Promise<string> {
   if (runId && !/^[\w.-]+$/.test(runId)) throw new Error("Invalid plan run ID.");
-  const directory = join(options.directory ?? join(root, ".vcli/state"), "plans");
-  const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
+  const parts = options.directory ? ["plans"] : ["state", "plans"];
+  const directory = await storagePath(root, parts, options.directory);
+  let filesystem: ReturnType<typeof storageFilesystem>;
+  try {
+    filesystem = storageFilesystem(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return "No plans yet. Use /plan, then describe the change. /build enables implementation.";
     throw error;
-  });
+  }
+  using ownedFilesystem = filesystem;
+  const entries = ownedFilesystem.list().map((entry) => entry.name);
   const plans = await Promise.all(
     entries
       .filter((name) => name.endsWith(".md") && (!runId || name === `${runId}.md`))
       .sort()
       .slice(-20)
-      .map(
-        async (name) =>
-          `Plan ${name.slice(0, -3)}\n${await readFile(join(directory, name), "utf8")}`,
-      ),
+      .map(async (name) => {
+        try {
+          return `Plan ${name.slice(0, -3)}\n${ownedFilesystem.readText(name, 32 * 1024 * 1024)}`;
+        } catch (error) {
+          throw new Error(
+            `Storage plan file refused: ${error instanceof Error ? error.message : "unreadable file"}`,
+          );
+        }
+      }),
   );
   return (
     plans.join("\n\n") ||

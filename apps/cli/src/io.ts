@@ -1,12 +1,12 @@
 import { createInterface } from "node:readline/promises";
-import type { ArchitectureGraph, ToolDefinition } from "@vcli/core";
+import { escapeTerminalText, type ArchitectureGraph, type ToolDefinition } from "@vcli/core";
 /** Wait for the destination to drain before completing a CLI write. */
 export function writeOutput(
   text: string,
   destination: "stdout" | "stderr" = "stdout",
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    process[destination].write(text, (error) => {
+    process[destination].write(escapeTerminalText(text), (error) => {
       if (error) reject(error);
       else resolve();
     });
@@ -48,9 +48,10 @@ export async function confirm(
   try {
     return /^(y|yes)$/i.test(
       (
-        await reader.question(`Allow ${tool.name} ${JSON.stringify(args).slice(0, 700)}? [y/N] `, {
-          signal,
-        })
+        await reader.question(
+          `Review ${escapeTerminalText(tool.name)}\n${escapeTerminalText(JSON.stringify(args, null, 2))}\nAllow this action? [y/N] `,
+          { signal },
+        )
       ).trim(),
     );
   } finally {

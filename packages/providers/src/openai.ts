@@ -6,6 +6,8 @@ import {
   abort,
   adapter,
   apiKey,
+  boundedProviderFetch,
+  DEFAULT_PROVIDER_ENDPOINTS,
   count,
   metadata,
   object,
@@ -256,9 +258,12 @@ export function openaiProvider(config: ProviderConfig, dependencies: ProviderDep
       client ??= new OpenAI({
         apiKey: key,
         baseURL:
-          config.baseURL ?? (config.provider === "openrouter" ? OPENROUTER_BASE_URL : undefined),
+          config.baseURL ??
+          (config.provider === "openrouter"
+            ? OPENROUTER_BASE_URL
+            : DEFAULT_PROVIDER_ENDPOINTS.openai),
         maxRetries: 0,
-        fetch: dependencies.fetch,
+        fetch: boundedProviderFetch(dependencies.fetch),
       });
       const stream = compatible
         ? await client.chat.completions.create(

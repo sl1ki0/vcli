@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { escapeTerminalText } from "@vcli/core";
 
 const rowCount = 2048;
 const text = "Модуль 💡 " + "x".repeat(512);
@@ -92,3 +93,79 @@ process.exit(0);
     await rm(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("CLI output and errors render untrusted terminal controls as literal text", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vcli-output-controls-"));
+  const io = resolve(import.meta.dir, "../apps/cli/src/io.ts");
+  const unsafe = "text\u001b]52;c;clipboard\u0007\u009b2J\r\u202eend";
+  try {
+    const fixture = join(directory, "controls.ts");
+    await writeFile(
+      fixture,
+      `import { print, writeOutput } from ${JSON.stringify(io)};
+await print(${JSON.stringify(unsafe)});
+await writeOutput(${JSON.stringify(unsafe)}, "stderr");
+`,
+    );
+    const child = Bun.spawn([process.execPath, fixture], {
+      cwd: directory,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout).toBe(escapeTerminalText(unsafe) + "\n");
+    expect(stderr).toBe(escapeTerminalText(unsafe));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI approval exposes the entire command including its tail and escapes terminal instructions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vcli-cli-approval-"));
+  const io = resolve(import.meta.dir, "../apps/cli/src/io.ts");
+  const command = "printf harmless " + "x".repeat(1200) + "; tail-must-be-reviewed\u009b2J";
+  let output = "",
+    answered = false;
+  try {
+    const fixture = join(directory, "approval.ts");
+    await writeFile(
+      fixture,
+      `import { confirm } from ${JSON.stringify(io)};
+const allowed = await confirm({ name: "shell_run", kind: "execute" } as any, { command: ${JSON.stringify(command)} });
+console.log("DECISION:" + allowed);
+`,
+    );
+    const child = Bun.spawn([process.execPath, fixture], {
+      cwd: directory,
+      terminal: {
+        cols: 100,
+        rows: 24,
+        data(terminal, bytes) {
+          output += new TextDecoder().decode(bytes);
+          if (!answered && output.includes("[y/N]")) {
+            answered = true;
+            terminal.write("n\n");
+          }
+        },
+      },
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try {
+      expect(await child.exited).toBe(0);
+      expect(answered).toBe(true);
+      expect(output).toContain("tail-must-be-reviewed\\u009b2J");
+      expect(output).not.toContain("\u009b");
+      expect(output).toContain("DECISION:false");
+    } finally {
+      clearTimeout(timer);
+      child.terminal?.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 10_000);

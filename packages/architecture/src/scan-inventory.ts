@@ -1,6 +1,9 @@
-import { readFile, readdir } from "node:fs/promises";
+import { isPrivateProjectPath, openHostFileSystem } from "@vcli/core";
 import { join, relative } from "node:path";
 import { compare, matchesPath, slash } from "./utils.ts";
+import { readArchitectureFile } from "./state-path.ts";
+import type { ArchitectureScanScope } from "@vcli/core";
+import { ArchitectureScanLimitError } from "./scan-limits.ts";
 
 const ALWAYS_IGNORED = new Set([
   ".git",
@@ -21,6 +24,9 @@ export const JS_SOURCE = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
 export const SOURCE =
   /\.(?:[cm]?[jt]s|[jt]sx|py|rs|go|java|kt|kts|cs|c|cc|cpp|h|hpp|rb|php|swift|sh|bash|zsh|vue|svelte)$/i;
 export const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+export const MAX_INVENTORY_ENTRIES = 100_000;
+export const MAX_INVENTORY_FILES = 20_000;
+export const MAX_DIRECTORY_DEPTH = 128;
 interface IgnoreRule {
   base: string;
   pattern: string;
@@ -31,12 +37,29 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-export async function inventory(root: string, diagnostics: string[]): Promise<string[]> {
+export async function inventory(
+  root: string,
+  diagnostics: string[],
+  scope?: ArchitectureScanScope,
+): Promise<string[]> {
   const files: string[] = [];
-  async function walk(directory: string, inherited: IgnoreRule[]) {
+  let entriesSeen = 0;
+  let ignoreBytes = 0;
+  let ignoreRules = 0;
+  async function walk(directory: string, inherited: IgnoreRule[], depth = 0) {
+    if (scope && !(await scope.allowDirectory(directory))) return;
+    if (depth > MAX_DIRECTORY_DEPTH)
+      throw new ArchitectureScanLimitError("Architecture scan directory depth exceeds 128.");
     let rules = inherited;
     try {
-      const text = await readFile(join(directory, ".gitignore"), "utf8");
+      const ignorePath = join(directory, ".gitignore");
+      const text =
+        !scope || (await scope.allowFile(ignorePath))
+          ? await readArchitectureFile(root, ignorePath, 65_536)
+          : "";
+      ignoreBytes += Buffer.byteLength(text);
+      if (ignoreBytes > 4 * 1024 * 1024)
+        throw new ArchitectureScanLimitError("Architecture scan ignore input exceeds 4 MiB.");
       const base = slash(relative(root, directory));
       rules = [
         ...rules,
@@ -49,18 +72,31 @@ export async function inventory(root: string, diagnostics: string[]): Promise<st
             negate: line.startsWith("!"),
           })),
       ];
+      ignoreRules += rules.length - inherited.length;
+      if (ignoreRules > 1000)
+        throw new ArchitectureScanLimitError("Architecture scan ignore rules exceed 1,000.");
     } catch (error) {
+      if (error instanceof ArchitectureScanLimitError) throw error;
       if (!isMissing(error))
         diagnostics.push(
           `Could not read ${slash(relative(root, directory)) || "."}/.gitignore: ${(error as Error).message}`,
         );
     }
-    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
-      compare(a.name, b.name),
-    );
+    const filesystem = openHostFileSystem(root, { canonicalRoot: true });
+    let entries;
+    try {
+      entries = filesystem.list(directory, MAX_INVENTORY_ENTRIES - entriesSeen);
+    } finally {
+      filesystem.close();
+    }
     for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory() && ALWAYS_IGNORED.has(entry.name)) continue;
+      if (++entriesSeen > MAX_INVENTORY_ENTRIES)
+        throw new ArchitectureScanLimitError(
+          "Architecture scan inventory exceeds 100,000 entries.",
+        );
+      if (entry.kind === "symlink") continue;
+      if (isPrivateProjectPath(entry.name)) continue;
+      if (entry.kind === "directory" && ALWAYS_IGNORED.has(entry.name)) continue;
       const absolute = join(directory, entry.name),
         path = slash(relative(root, absolute));
       let ignored = false;
@@ -77,8 +113,11 @@ export async function inventory(root: string, diagnostics: string[]): Promise<st
         if (matched) ignored = !rule.negate;
       }
       if (ignored) continue;
-      if (entry.isDirectory()) await walk(absolute, rules);
-      else if (entry.isFile()) files.push(path);
+      if (entry.kind === "directory") await walk(absolute, rules, depth + 1);
+      else if (entry.kind === "file" && (!scope || (await scope.allowFile(absolute))))
+        files.push(path);
+      if (files.length > MAX_INVENTORY_FILES)
+        throw new ArchitectureScanLimitError("Architecture scan inventory exceeds 20,000 files.");
     }
   }
   await walk(root, []);

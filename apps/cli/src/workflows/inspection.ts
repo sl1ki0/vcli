@@ -1,5 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { RootedFileSystem } from "./rooted-filesystem.ts";
 import { PermissionGate, type PermissionMode, type Session, type ToolDefinition } from "@vcli/core";
 import { createCheckpointTools } from "../tools/checkpoints.ts";
 import { CheckpointService } from "./checkpoints.ts";
@@ -59,7 +58,14 @@ export async function inspectWorkflow(
       const hooks = await loadProjectHooks(root, new PermissionGate("read-only"));
       if (!hooks.hasHooks)
         return "No command hooks configured. Add .vcli/hooks.json; see docs/local-workflows.md.";
-      return readFile(join(root, ".vcli/hooks.json"), "utf8");
+      const filesystem = new RootedFileSystem(root, {
+        allowProtectedPaths: true,
+      });
+      try {
+        return filesystem.readText(".vcli/hooks.json", 65_536);
+      } finally {
+        filesystem.close();
+      }
     }
     case "plan":
       return session?.plan ? formatRunPlan(session.plan, session.id) : readPlans(root);

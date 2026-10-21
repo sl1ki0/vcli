@@ -274,45 +274,56 @@ describe("harness boundaries", () => {
     expect(session.status).toBe("budget");
     expect(requests).toBe(0);
   });
-  test("missing provider usage still consumes a durable task budget reservation", async () => {
-    const store = new MemoryStore();
-    const tools = new ToolRegistry();
-    let requests = 0;
-    tools.register({
-      name: "read",
-      description: "read",
-      kind: "read",
-      eager: true,
-      inputSchema: { type: "object" },
-      execute: async () => ({ text: "ok" }),
+  for (const [label, usage] of [
+    ["missing", undefined],
+    ["missing input", { input: 0, output: 40, cached: 0 }],
+    ["missing output", { input: 100, output: 0, cached: 0 }],
+    ["negative", { input: -100, output: 20, cached: 0 }],
+    ["fractional", { input: 0.5, output: 20, cached: 0 }],
+    ["nonfinite", { input: NaN, output: 20, cached: 0 }],
+    ["unsafe", { input: Number.MAX_SAFE_INTEGER, output: 20, cached: 0 }],
+  ] as const)
+    test(`${label} provider usage still consumes a durable task budget reservation`, async () => {
+      const store = new MemoryStore();
+      const tools = new ToolRegistry();
+      let requests = 0;
+      tools.register({
+        name: "read",
+        description: "read",
+        kind: "read",
+        eager: true,
+        inputSchema: { type: "object" },
+        execute: async () => ({ text: "ok" }),
+      });
+      const provider: ProviderAdapter = {
+        id: "fake",
+        model: "test",
+        contextWindow: 64_000,
+        async *stream() {
+          requests++;
+          yield { type: "tool-call", call: { id: "call", name: "read", arguments: {} } };
+          if (usage) yield { type: "usage", usage };
+          yield { type: "done" };
+        },
+      };
+      const runtime = new AgentRuntime({
+        root: "/project",
+        provider,
+        architecture,
+        tools,
+        store,
+        permissions: new PermissionGate("yolo"),
+        settings: { taskTokens: 8000 },
+      });
+      const session = await runtime.run("inspect", new AbortController().signal);
+      expect(requests).toBe(1);
+      expect(session.status).toBe("budget");
+      expect(Number.isSafeInteger(session.usage.input)).toBe(true);
+      expect(session.usage.input).toBeGreaterThanOrEqual(0);
+      expect(session.budgetSpent).toBe(8000);
+      await runtime.run("resume", new AbortController().signal, session.id);
+      expect(requests).toBe(1);
     });
-    const provider: ProviderAdapter = {
-      id: "fake",
-      model: "test",
-      contextWindow: 64_000,
-      async *stream() {
-        requests++;
-        yield { type: "tool-call", call: { id: "call", name: "read", arguments: {} } };
-        yield { type: "done" };
-      },
-    };
-    const runtime = new AgentRuntime({
-      root: "/project",
-      provider,
-      architecture,
-      tools,
-      store,
-      permissions: new PermissionGate("yolo"),
-      settings: { taskTokens: 8000 },
-    });
-    const session = await runtime.run("inspect", new AbortController().signal);
-    expect(requests).toBe(1);
-    expect(session.status).toBe("budget");
-    expect(session.usage.input).toBe(0);
-    expect(session.budgetSpent).toBe(8000);
-    await runtime.run("resume", new AbortController().signal, session.id);
-    expect(requests).toBe(1);
-  });
   test("interrupted mutation is inspected on resume, never replayed", async () => {
     const store = new MemoryStore();
     const tools = new ToolRegistry();

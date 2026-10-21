@@ -1,7 +1,7 @@
-import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { Skill } from "@vcli/core";
-import { containedPath, exists, message, object, validateName } from "./paths.ts";
+import { openHostFileSystem, type Skill } from "@vcli/core";
+import { containedPath, exists, message, object, readPackageText, validateName } from "./paths.ts";
 
 export const projectSkillLocations = [
   ".vcli/skills",
@@ -14,20 +14,13 @@ export const projectSkillLocations = [
 const FRONTMATTER_LIMIT = 16_384;
 
 export async function readSkillMetadata(path: string): Promise<Record<string, unknown>> {
-  const file = await open(path, "r");
+  const text = (await readPackageText(path, FRONTMATTER_LIMIT, true)).replace(/^\uFEFF/, "");
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  if (!match) throw new Error(`SKILL.md needs YAML frontmatter within ${FRONTMATTER_LIMIT} bytes`);
   try {
-    const buffer = Buffer.alloc(FRONTMATTER_LIMIT);
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    const text = buffer
-      .subarray(0, bytesRead)
-      .toString("utf8")
-      .replace(/^\uFEFF/, "");
-    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-    if (!match)
-      throw new Error(`SKILL.md needs YAML frontmatter within ${FRONTMATTER_LIMIT} bytes`);
     return object(Bun.YAML.parse(match[1]!), "Skill frontmatter");
-  } finally {
-    await file.close();
+  } catch {
+    throw new Error("Invalid skill frontmatter object");
   }
 }
 
@@ -43,14 +36,23 @@ export async function discoverSkills(
     try {
       if (!(await exists(join(root, location)))) continue;
       const directory = await containedPath(root, location);
-      if (!(await stat(directory)).isDirectory())
-        throw new Error(`Skill location is not a directory: ${location}`);
-      const paths = (await exists(join(directory, "SKILL.md")))
-        ? [join(directory, "SKILL.md")]
-        : (await readdir(directory, { withFileTypes: true }))
-            .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((entry) => join(directory, entry.name, "SKILL.md"));
+      const filesystem = openHostFileSystem("/", {
+        canonicalRoot: true,
+        allowProtectedPaths: true,
+      });
+      let paths: string[];
+      try {
+        if (!filesystem.stat(directory)?.isDirectory())
+          throw new Error(`Skill location is not a directory: ${location}`);
+        paths = (await exists(join(directory, "SKILL.md")))
+          ? [join(directory, "SKILL.md")]
+          : filesystem
+              .list(directory)
+              .filter((entry) => entry.kind === "directory" || entry.kind === "symlink")
+              .map((entry) => join(directory, entry.name, "SKILL.md"));
+      } finally {
+        filesystem.close();
+      }
       for (const path of paths) {
         if (!(await exists(path))) continue;
         try {
@@ -101,8 +103,7 @@ export async function loadSkill(
     );
     if (matches.length > 1) throw new Error(`Ambiguous skill ${target}; use plugin:skill`);
     selected = matches[0];
-    if (!selected && !target.includes("/") && !target.includes("\\"))
-      throw new Error(`Unknown skill: ${target}`);
+    if (!selected) throw new Error(`Unknown skill: ${target}`);
   }
   const path = selected?.path ?? (target as string);
   const safe = await realpath(path);
@@ -110,5 +111,5 @@ export async function loadSkill(
   // Revalidate metadata and package containment after discovery (including changed symlinks).
   if (selected && safe !== selected.path) throw new Error("Skill path changed after discovery");
   await readSkillMetadata(safe);
-  return readFile(safe, "utf8");
+  return readPackageText(safe);
 }

@@ -1,10 +1,57 @@
-import { existsSync } from "node:fs";
+import { isPrivateProjectPath, openHostFileSystem } from "@vcli/core";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import ts from "typescript";
 import { slash } from "./utils.ts";
 
 /** Compiler options and resolution caches live for one scan, so config edits and deleted files take effect immediately. */
-export function createCompilerResolver(root: string, diagnostics: string[]) {
+export function createCompilerResolver(
+  root: string,
+  diagnostics: string[],
+  allowedPaths?: Set<string>,
+) {
+  const filesystem = openHostFileSystem(root, { canonicalRoot: true });
+  const withinRoot = (path: string): boolean => {
+    const part = relative(root, path);
+    return (
+      part !== ".." && !part.startsWith("../") && !isAbsolute(part) && !isPrivateProjectPath(part)
+    );
+  };
+  const fileExists = (path: string): boolean => {
+    try {
+      return (
+        withinRoot(path) &&
+        (!allowedPaths || allowedPaths.has(path)) &&
+        filesystem.stat(path)?.isFile() === true
+      );
+    } catch {
+      return false;
+    }
+  };
+  const directoryExists = (path: string): boolean => {
+    try {
+      return withinRoot(path) && filesystem.stat(path)?.isDirectory() === true;
+    } catch {
+      return false;
+    }
+  };
+  const readFile = (path: string): string | undefined => {
+    if (!fileExists(path)) return undefined;
+    try {
+      return filesystem.readText(path, 1024 * 1024);
+    } catch {
+      return undefined;
+    }
+  };
+  const host: ts.ParseConfigHost & ts.ModuleResolutionHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    fileExists,
+    directoryExists,
+    readFile,
+    // Only compiler options are needed: the inventory already owns file traversal.
+    readDirectory: () => [],
+    getCurrentDirectory: () => root,
+    realpath: (path) => path,
+  };
   const optionsCache = new Map<string, ts.CompilerOptions>();
   const resolutionCaches = new Map<string, ts.ModuleResolutionCache>();
   function optionsFor(file: string): { key: string; options: ts.CompilerOptions } {
@@ -15,7 +62,7 @@ export function createCompilerResolver(root: string, diagnostics: string[]) {
       (!relative(root, directory).startsWith("..") && !isAbsolute(relative(root, directory)))
     ) {
       const candidate = join(directory, "tsconfig.json");
-      if (existsSync(candidate)) {
+      if (fileExists(candidate)) {
         config = candidate;
         break;
       }
@@ -32,13 +79,13 @@ export function createCompilerResolver(root: string, diagnostics: string[]) {
         resolveJsonModule: true,
       };
       if (config) {
-        const read = ts.readConfigFile(config, ts.sys.readFile);
+        const read = ts.readConfigFile(config, readFile);
         if (read.error)
           diagnostics.push(
             `${slash(relative(root, config))}: ${ts.flattenDiagnosticMessageText(read.error.messageText, " ")}`,
           );
         else {
-          const content = ts.parseJsonConfigFileContent(read.config, ts.sys, dirname(config));
+          const content = ts.parseJsonConfigFileContent(read.config, host, dirname(config));
           options = { ...options, ...content.options };
           for (const error of content.errors.filter((e) => e.code !== 18003))
             diagnostics.push(
@@ -55,9 +102,10 @@ export function createCompilerResolver(root: string, diagnostics: string[]) {
     return { key, options: optionsCache.get(key)! };
   }
   return {
+    close: () => filesystem.close(),
     resolve(specifier: string, file: string) {
       const { key, options } = optionsFor(file);
-      return ts.resolveModuleName(specifier, file, options, ts.sys, resolutionCaches.get(key))
+      return ts.resolveModuleName(specifier, file, options, host, resolutionCaches.get(key))
         .resolvedModule;
     },
     revisionOptions() {

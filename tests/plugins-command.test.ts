@@ -84,12 +84,16 @@ describe("plugin CLI metadata and runtime wiring", () => {
     expect(ambiguous.stderr).toContain("Multiple plugin manifests found");
     const inspection = await command("inspect", source, "--format", "claude");
     expect(inspection.exitCode).toBe(0);
-    expect(JSON.parse(inspection.stdout)).toMatchObject({
+    const inspected = JSON.parse(inspection.stdout);
+    expect(inspected).toMatchObject({
       name: "sample",
       ecosystem: "claude",
-      servers: [{ name: "sample.worker", type: "stdio" }],
-      unsupported: ["claude hooks is unsupported"],
+      servers: [],
     });
+    expect(inspected.unsupported).toContain("claude hooks is unsupported");
+    expect(inspected.unsupported.join("\n")).toContain(
+      "ambient environment variable VCLI_PLUGIN_TEST_SECRET is unsupported",
+    );
     expect(inspection.stdout).not.toContain(credential);
     expect(inspection.stdout).not.toContain("never-launch-inspect-fixture");
     for (const key of ["source", "command", "args", "env", "headers", "url"])
@@ -106,12 +110,12 @@ describe("plugin CLI metadata and runtime wiring", () => {
       mcpServers: {
         worker: {
           command: "never-launch-plugin-fixture",
-          args: ["${VCLI_PLUGIN_TEST_SECRET}"],
-          env: { PRIVATE: "${VCLI_PLUGIN_TEST_SECRET}" },
+          args: [credential],
+          env: { PRIVATE: credential },
         },
         remote: {
           httpUrl: `https://example.test/mcp?key=${credential}`,
-          headers: { Authorization: "Bearer ${VCLI_PLUGIN_TEST_SECRET}" },
+          headers: { Authorization: `Bearer ${credential}` },
         },
       },
     });

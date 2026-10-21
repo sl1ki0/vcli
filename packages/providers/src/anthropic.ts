@@ -5,6 +5,8 @@ import {
   abort,
   adapter,
   apiKey,
+  boundedProviderFetch,
+  DEFAULT_PROVIDER_ENDPOINTS,
   count,
   metadata,
   object,
@@ -136,7 +138,12 @@ export function anthropicProvider(config: ProviderConfig, dependencies: Provider
     return async (request, signal) => {
       const key = apiKey(config);
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      client ??= new Anthropic({ apiKey: key, baseURL: config.baseURL, maxRetries: 0 });
+      client ??= new Anthropic({
+        apiKey: key,
+        baseURL: config.baseURL ?? DEFAULT_PROVIDER_ENDPOINTS.anthropic,
+        maxRetries: 0,
+        fetch: boundedProviderFetch(dependencies.fetch),
+      });
       return (await client.messages.create(request as unknown as MessageCreateParamsStreaming, {
         signal,
       })) as unknown as AsyncIterable<WireObject>;

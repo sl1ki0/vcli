@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { dirname } from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { storageFilesystem, storagePath } from "./state-path.ts";
+import type { RootedFileSystem } from "./rooted-filesystem.ts";
 
 export type TaskStatus = "pending" | "in-progress" | "complete" | "canceled";
 export interface LocalTask {
@@ -61,15 +62,29 @@ function validate(tasks: LocalTask[]): void {
 
 /** Project-local tasks survive sessions; atomic writes and an exclusive lock prevent lost updates. */
 export class LocalTaskStore {
-  private readonly path: string;
-  constructor(root: string) {
-    this.path = join(root, ".vcli", "state", "tasks.json");
+  constructor(private readonly root: string) {}
+
+  private path(name = "tasks.json"): Promise<string> {
+    return storagePath(this.root, ["state", name]);
   }
 
   async list(): Promise<LocalTask[]> {
+    const path = await this.path();
+    let filesystem: RootedFileSystem;
+    try {
+      filesystem = storageFilesystem(dirname(path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    using ownedFilesystem = filesystem;
+    return this.readTasks(ownedFilesystem);
+  }
+
+  private readTasks(filesystem: RootedFileSystem): LocalTask[] {
     let raw: string;
     try {
-      raw = await readFile(this.path, "utf8");
+      raw = filesystem.readText("tasks.json", 32 * 1024 * 1024);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -120,14 +135,19 @@ export class LocalTaskStore {
     change: (tasks: LocalTask[]) => LocalTask,
     signal?: AbortSignal,
   ): Promise<LocalTask> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const lockPath = `${this.path}.lock`;
+    using filesystem = storageFilesystem(await storagePath(this.root, ["state"]), true);
+    await this.path();
+    const lockName = "tasks.json.lock";
     const deadline = Date.now() + 3000;
-    let lock;
+    const lockToken = randomUUID();
+    const lockDigest = createHash("sha256").update(lockToken).digest("hex");
+    let lock = false;
     while (!lock) {
       signal?.throwIfAborted();
+      const lockPath = await this.path(lockName);
       try {
-        lock = await open(lockPath, "wx", 0o600);
+        filesystem.writeAtomic(lockName, lockToken, { expected: null, mode: 0o600 });
+        lock = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         if (Date.now() >= deadline)
@@ -137,25 +157,17 @@ export class LocalTaskStore {
         await setTimeout(25, undefined, { signal });
       }
     }
-    const temporary = `${this.path}.${randomUUID()}.tmp`;
     try {
-      const tasks = await this.list();
+      const tasks = this.readTasks(filesystem);
       const task = change(tasks);
       validate(tasks);
       signal?.throwIfAborted();
-      const file = await open(temporary, "wx", 0o600);
-      try {
-        await file.writeFile(JSON.stringify({ version: 1, tasks }, null, 2));
-        await file.sync();
-      } finally {
-        await file.close();
-      }
-      await rename(temporary, this.path);
+      filesystem.writeAtomic("tasks.json", JSON.stringify({ version: 1, tasks }, null, 2), {
+        mode: 0o600,
+      });
       return task;
     } finally {
-      await rm(temporary, { force: true });
-      await lock.close();
-      await rm(lockPath, { force: true });
+      filesystem.delete(lockName, { expected: { digest: lockDigest, mode: 0o600 } });
     }
   }
 }

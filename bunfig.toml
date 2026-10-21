@@ -1,4 +1,4 @@
-preload = ["@opentui/solid/preload"]
+preload = ["@opentui/solid/preload", "./apps/cli/src/workflows/host-filesystem.ts"]
 
 [test]
-preload = ["@opentui/solid/preload"]
+preload = ["@opentui/solid/preload", "./tests/platform-preload.ts"]
