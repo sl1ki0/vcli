@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, open, rename, rm } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
+import { readStorageText, storagePath } from "./state-path.ts";
 
 export type TaskStatus = "pending" | "in-progress" | "complete" | "canceled";
 export interface LocalTask {
@@ -61,15 +61,16 @@ function validate(tasks: LocalTask[]): void {
 
 /** Project-local tasks survive sessions; atomic writes and an exclusive lock prevent lost updates. */
 export class LocalTaskStore {
-  private readonly path: string;
-  constructor(root: string) {
-    this.path = join(root, ".vcli", "state", "tasks.json");
+  constructor(private readonly root: string) {}
+
+  private path(name = "tasks.json"): Promise<string> {
+    return storagePath(this.root, ["state", name]);
   }
 
   async list(): Promise<LocalTask[]> {
     let raw: string;
     try {
-      raw = await readFile(this.path, "utf8");
+      raw = await readStorageText(await this.path());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -120,12 +121,14 @@ export class LocalTaskStore {
     change: (tasks: LocalTask[]) => LocalTask,
     signal?: AbortSignal,
   ): Promise<LocalTask> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const lockPath = `${this.path}.lock`;
+    await mkdir(await storagePath(this.root, ["state"]), { recursive: true, mode: 0o700 });
+    await this.path();
+    const lockName = "tasks.json.lock";
     const deadline = Date.now() + 3000;
     let lock;
     while (!lock) {
       signal?.throwIfAborted();
+      const lockPath = await this.path(lockName);
       try {
         lock = await open(lockPath, "wx", 0o600);
       } catch (error) {
@@ -137,25 +140,30 @@ export class LocalTaskStore {
         await setTimeout(25, undefined, { signal });
       }
     }
-    const temporary = `${this.path}.${randomUUID()}.tmp`;
+    const temporaryName = `tasks.json.${randomUUID()}.tmp`;
+    let temporaryCreated = false;
     try {
       const tasks = await this.list();
       const task = change(tasks);
       validate(tasks);
       signal?.throwIfAborted();
-      const file = await open(temporary, "wx", 0o600);
+      const file = await open(await this.path(temporaryName), "wx", 0o600);
+      temporaryCreated = true;
       try {
         await file.writeFile(JSON.stringify({ version: 1, tasks }, null, 2));
         await file.sync();
       } finally {
         await file.close();
       }
-      await rename(temporary, this.path);
+      await rename(await this.path(temporaryName), await this.path());
       return task;
     } finally {
-      await rm(temporary, { force: true });
-      await lock.close();
-      await rm(lockPath, { force: true });
+      try {
+        if (temporaryCreated) await rm(await this.path(temporaryName), { force: true });
+      } finally {
+        await lock.close();
+        await rm(await this.path(lockName), { force: true });
+      }
     }
   }
 }

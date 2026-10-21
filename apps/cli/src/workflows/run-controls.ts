@@ -87,7 +87,9 @@ export async function resolveTool(
     const entry = session.runState?.calls[callId];
     if (
       (pending ||
-        (entry && entry.kind !== "read" && ["uncertain", "started"].includes(entry.status))) &&
+        (entry &&
+          (entry.kind !== "read" || (entry.sideEffects ?? 0) > 0) &&
+          ["uncertain", "started"].includes(entry.status))) &&
       !attribution
     )
       throw new Error(

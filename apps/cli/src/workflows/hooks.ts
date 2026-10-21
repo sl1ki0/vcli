@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { open } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { processEnvironment } from "./process-environment.ts";
 import type { PermissionGate } from "@vcli/core";
 import { type ToolCall, type ToolContext, type ToolDefinition, type ToolResult } from "@vcli/core";
 
@@ -90,15 +92,16 @@ async function executeHook(
   return new Promise((resolve) => {
     const child = spawn("/bin/sh", ["-c", hook.command], {
       cwd: context.root,
-      env: process.env,
+      env: processEnvironment(),
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     let status: HookReport["status"] = "success";
     let bytes = 0;
     let truncated = false;
+    let backgroundTerminated = false;
     const chunks: Buffer[] = [];
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let termination: Promise<void> | undefined;
     const kill = (signal: NodeJS.Signals) => {
       try {
         if (child.pid && process.platform !== "win32") process.kill(-child.pid, signal);
@@ -109,7 +112,12 @@ async function executeHook(
     };
     const stop = () => {
       kill("SIGTERM");
-      killTimer ??= setTimeout(() => kill("SIGKILL"), 250);
+      termination ??= new Promise((resolve) => {
+        setTimeout(() => {
+          kill("SIGKILL");
+          resolve();
+        }, 250);
+      });
     };
     const abort = () => {
       status = "aborted";
@@ -130,21 +138,37 @@ async function executeHook(
       }
       if (chunk.length > room) truncated = true;
     };
-    const finish = (code: number | null, error?: Error) => {
+    const finish = async (code: number | null, error?: Error) => {
+      await termination;
       clearTimeout(timer);
-      clearTimeout(killTimer);
       context.signal.removeEventListener("abort", abort);
-      if (status === "success" && (code !== 0 || error)) status = "failed";
+      if (status === "success" && (code !== 0 || error || backgroundTerminated)) status = "failed";
       resolve({
         name: hook.name,
         event,
         status,
-        output: error?.message ?? Buffer.concat(chunks).toString("utf8"),
+        output:
+          error?.message ??
+          Buffer.concat(chunks).toString("utf8") +
+            (backgroundTerminated
+              ? "\nBackground subprocesses were terminated after hook exit; background work is unsupported."
+              : ""),
         truncated,
       });
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
+    child.once("exit", () => {
+      if (!termination && child.pid && process.platform !== "win32") {
+        try {
+          process.kill(-child.pid, 0);
+          backgroundTerminated = true;
+          stop();
+        } catch {
+          /* No group remains after the leader exits. */
+        }
+      }
+    });
     child.once("error", (error) => finish(null, error));
     child.once("close", (code) => finish(code));
     // A hook may finish without consuming stdin. EPIPE is not a hook failure.
@@ -243,13 +267,23 @@ export async function loadProjectHooks(
 ): Promise<ProjectHooks> {
   let handle;
   try {
-    handle = await open(join(root, ".vcli/hooks.json"), "r");
+    const canonicalRoot = await realpath(root);
+    const directory = join(canonicalRoot, ".vcli");
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error("hooks.json requires a project .vcli directory without symbolic links.");
+    handle = await open(
+      join(directory, "hooks.json"),
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return new ProjectHooks({ beforeTool: [], afterTool: [] }, permissions, preflight);
   }
   try {
-    if (!(await handle.stat()).isFile()) throw new Error("hooks.json must be a regular file.");
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink > 1)
+      throw new Error("hooks.json must be a regular file without hard links.");
     const buffer = Buffer.alloc(CONFIG_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     if (bytesRead > CONFIG_BYTES) throw new Error("hooks.json exceeds 64 KiB.");

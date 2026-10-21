@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { projectPath, type ProjectPolicy } from "./policy.ts";
+import { readFileBytes } from "./file-data.ts";
 
 export interface JournalFile {
   digest: string;
@@ -80,14 +81,17 @@ export async function captureTree(root: string, policy?: ProjectPolicy): Promise
           `Journal cannot snapshot a nonregular project entry: ${relative(root, path)}`,
         );
       await projectPath(root, path);
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const handle = await open(
+        path,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       try {
         const stat = await handle.stat();
         if (!stat.isFile() || stat.nlink > 1)
           throw new Error("Journal refuses linked or nonregular files.");
         if (++files > MAX_FILES || bytes + stat.size > MAX_BYTES)
           throw new Error("Project journal snapshot exceeds its file or byte limit.");
-        const content = await handle.readFile();
+        const content = await readFileBytes(handle, MAX_BYTES - bytes);
         bytes += content.length;
         tree[relative(root, path).split(sep).join("/")] = {
           digest: createHash("sha256").update(content).digest("hex"),

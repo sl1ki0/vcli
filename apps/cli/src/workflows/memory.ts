@@ -1,15 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { estimateTokens, type ToolDefinition } from "@vcli/core";
 import { objectSchema, stringSchema } from "../tools/schema.ts";
 
@@ -35,11 +27,34 @@ function prefix(text: string, bytes: number): string {
   return encoded.subarray(0, end).toString("utf8");
 }
 
-async function readBounded(path: string): Promise<{ text: string; truncated: boolean }> {
-  const handle = await open(path, "r");
+/** Instruction sources are project data; never follow them into user files or private state. */
+async function instructionPath(root: string, source: string): Promise<string> {
+  const canonicalRoot = await realpath(root);
+  const path = join(canonicalRoot, source);
+  if (source === MEMORY_PATH) {
+    try {
+      const directory = await lstat(join(canonicalRoot, ".vcli"));
+      if (!directory.isDirectory() || directory.isSymbolicLink())
+        throw new Error(
+          "Project memory requires a regular .vcli directory without symbolic links.",
+        );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return path;
+}
+
+async function readBounded(
+  root: string,
+  source: string,
+): Promise<{ text: string; truncated: boolean }> {
+  const path = await instructionPath(root, source);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stats = await handle.stat();
-    if (!stats.isFile()) throw new Error("expected a regular file");
+    if (!stats.isFile() || stats.nlink > 1)
+      throw new Error("expected a regular file without hard links");
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const truncated = bytesRead > MAX_FILE_BYTES || stats.size > MAX_FILE_BYTES;
@@ -77,7 +92,7 @@ export async function loadProjectMemory(
   if (options.userInstructions) append("User instructions", options.userInstructions, false);
   for (const path of SOURCE_PATHS) {
     try {
-      const content = await readBounded(join(root, path));
+      const content = await readBounded(root, path);
       append(path, content.text, content.truncated);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
@@ -91,14 +106,17 @@ export async function loadProjectMemory(
 }
 
 async function writableMemoryPath(root: string): Promise<string> {
+  const checked = await instructionPath(root, MEMORY_PATH);
   const canonicalRoot = await realpath(root);
   const directory = join(canonicalRoot, ".vcli");
   await mkdir(directory, { recursive: true });
   if ((await realpath(directory)) !== directory)
     throw new Error("Project memory cannot be written through a symlinked .vcli directory.");
-  const path = join(directory, "MEMORY.md");
+  const path = checked;
   try {
-    if (!(await lstat(path)).isFile()) throw new Error("Project memory must be a regular file.");
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.nlink > 1)
+      throw new Error("Project memory must be a regular file without hard links.");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -117,9 +135,9 @@ export function createMemoryTools(): ToolDefinition[] {
       async execute(_args, context) {
         context.signal.throwIfAborted();
         try {
-          const content = await readBounded(resolve(context.root, MEMORY_PATH));
+          const content = await readBounded(context.root, MEMORY_PATH);
           return {
-            text: `Revision: ${content.truncated ? "unavailable (file too large; use files_read/files_patch)" : revision(content.text)}\n${content.text || "Project memory is empty."}`,
+            text: `Revision: ${content.truncated ? "unavailable (file too large; shorten it locally before updating)" : revision(content.text)}\n${content.text || "Project memory is empty."}`,
             details: {
               path: MEMORY_PATH,
               revision: content.truncated ? null : revision(content.text),
@@ -154,7 +172,10 @@ export function createMemoryTools(): ToolDefinition[] {
         const path = await writableMemoryPath(context.root);
         let current: string | undefined;
         try {
-          current = await readFile(path, "utf8");
+          const content = await readBounded(context.root, MEMORY_PATH);
+          if (content.truncated)
+            throw new Error("Project memory is too large; shorten it locally before updating.");
+          current = content.text;
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }

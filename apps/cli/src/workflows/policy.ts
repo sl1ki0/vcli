@@ -40,33 +40,39 @@ export async function projectPath(
     : requested;
   if (!pathInside(root, path) || (!options.allowRoot && path === root))
     throw new Error("Path must remain inside the project workspace.");
-  const part = relative(root, path);
-  if (
-    part === ".vcli" ||
-    part.startsWith(`.vcli${sep}`) ||
-    part === ".git" ||
-    part.startsWith(`.git${sep}`)
-  )
+  const protectedPath = (candidate: string): boolean => {
+    const first = relative(root, candidate).split(sep)[0]?.toLowerCase();
+    return first === ".vcli" || first === ".git";
+  };
+  if (protectedPath(path))
     throw new Error("Agent tools cannot access protected project configuration or state.");
+  const components = relative(root, path).split(sep).filter(Boolean);
   let current = root;
-  for (const component of part.split(sep).filter(Boolean)) {
-    current = join(current, component);
+  for (let index = 0; index < components.length; index++) {
+    const candidate = join(current, components[index]!);
+    const final = index === components.length - 1;
     try {
-      const stat = await lstat(current);
+      const stat = await lstat(candidate);
       if (stat.isSymbolicLink()) throw new Error("Project paths cannot contain symbolic links.");
-      if (current !== path && !stat.isDirectory())
-        throw new Error("Path parent is not a directory.");
-      if (current === path && options.directory && !stat.isDirectory())
+      if (!final && !stat.isDirectory()) throw new Error("Path parent is not a directory.");
+      if (final && options.directory && !stat.isDirectory())
         throw new Error("Working directory must be an existing directory.");
-      if (current === path && !stat.isDirectory() && (!stat.isFile() || stat.nlink > 1))
+      if (final && !stat.isDirectory() && (!stat.isFile() || stat.nlink > 1))
         throw new Error("Project tools require regular files without hard links.");
+      // Real paths also normalize filesystem casing. Lexical casing alone is not an
+      // authorization identity on the default macOS/Windows filesystems.
+      current = await realpath(candidate);
+      if (!pathInside(root, current))
+        throw new Error("Path must remain inside the project workspace.");
+      if (protectedPath(current))
+        throw new Error("Agent tools cannot access protected project configuration or state.");
     } catch (error) {
       if (!missing(error)) throw error;
       if (options.directory) throw new Error("Working directory does not exist.");
-      break;
+      return join(current, ...components.slice(index));
     }
   }
-  return path;
+  return current;
 }
 
 function rules(value: unknown, name: string): Rules {
@@ -197,7 +203,10 @@ export class ProjectPolicy {
       throw new Error("Policy must be outside the mutable workspace.");
     if (canonical !== path)
       throw new Error("Policy path must be canonical without symbolic links.");
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     let raw: unknown;
     try {
       if (!(await handle.stat()).isFile()) throw new Error("Policy must be a regular file.");

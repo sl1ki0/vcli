@@ -5,9 +5,11 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +18,7 @@ import { PermissionGate, ToolRegistry, type ToolCall, type ToolContext } from "@
 import { fileTools } from "../apps/cli/src/tools/files.ts";
 import { createCheckpointTools } from "../apps/cli/src/tools/checkpoints.ts";
 import { CheckpointService } from "../apps/cli/src/workflows/checkpoints.ts";
+import { ProjectPolicy } from "../apps/cli/src/workflows/policy.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -174,6 +177,59 @@ describe("exact-file checkpoints", () => {
     await writeFile(join(f.root, ".vcli/state/checkpoints", `${id}.before`), "corrupt");
     await expect(f.service.restore(id, f.context)).rejects.toThrow("corrupt");
     expect(await readFile(join(f.root, "file"), "utf8")).toBe("after");
+  });
+
+  test("restore revalidates current directory policy before any replacement", async () => {
+    const f = await fixture();
+    const outside = await fixture();
+    await mkdir(join(f.root, "private"));
+    await writeFile(join(f.root, "private/file"), "before");
+    const id = await f.edit("private/file", "after");
+    const policyPath = join(outside.root, "policy.json");
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        commands: { allow: [], deny: [] },
+        directories: { allow: ["."], deny: ["private"] },
+      }),
+    );
+    const policy = await ProjectPolicy.load(f.root, await realpath(policyPath));
+    await expect(
+      f.service.restore(id, {
+        ...f.context,
+        authorizePath: (path, write) => policy.resolvePath(path, { write }),
+      }),
+    ).rejects.toThrow("Directory");
+    expect(await readFile(join(f.root, "private/file"), "utf8")).toBe("after");
+  });
+
+  test("forged checkpoint metadata cannot restore protected configuration", async () => {
+    const f = await fixture();
+    await writeFile(join(f.root, "source"), "before");
+    const id = await f.edit("source", "after");
+    const metadataPath = join(f.root, ".vcli/state/checkpoints", `${id}.json`);
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    metadata.path = ".vcli/private-fixture.txt";
+    await writeFile(join(f.root, ".vcli/private-fixture.txt"), "after");
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    await expect(f.service.restore(id, f.context)).rejects.toThrow("protected");
+    expect(await readFile(join(f.root, ".vcli/private-fixture.txt"), "utf8")).toBe("after");
+  });
+
+  test("oversized source reads and checkpoints fail before buffering the whole file", async () => {
+    const f = await fixture();
+    await writeFile(join(f.root, "huge.txt"), "");
+    await truncate(join(f.root, "huge.txt"), 16 * 1024 * 1024 + 1);
+    await expect(
+      fileTools
+        .find((tool) => tool.name === "files_read")!
+        .execute({ path: "huge.txt", start: 1, end: 1 }, f.context),
+    ).rejects.toThrow("byte limit");
+    await expect(f.service.before(f.call("huge.txt", "new"), f.context)).rejects.toThrow(
+      "byte limit",
+    );
+    expect((await stat(join(f.root, "huge.txt"))).size).toBe(16 * 1024 * 1024 + 1);
   });
 
   test("leaves denied, invalid, and shell calls without captured mutations", async () => {

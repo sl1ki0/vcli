@@ -65,7 +65,10 @@ export class JournalStore {
     await this.prepare();
     const path = this.path(id);
     try {
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const handle = await open(
+        path,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       try {
         if (!(await handle.stat()).isFile())
           throw new Error("Journal record must be a regular file.");

@@ -1,30 +1,68 @@
 import { Database } from "bun:sqlite";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, RuntimeEvent, Session, SessionStore } from "@vcli/core";
 import { initializeSessionSchema } from "./session-schema.ts";
 import { listSessionSummaries, readSession, writeSession } from "./session-history.ts";
+import { readStorageText, storagePath } from "./workflows/state-path.ts";
 
 export class SqliteSessionStore implements SessionStore {
   private constructor(
     private readonly db: Database,
-    private readonly artifactRoot: string,
+    private readonly artifactPath: (id: string) => Promise<string>,
   ) {}
   static async open(
     root: string,
     options: { directory?: string } = {},
   ): Promise<SqliteSessionStore> {
-    const directory = options.directory ?? join(root, ".vcli", "state");
-    const artifacts = options.directory
-      ? join(directory, "artifacts")
-      : join(root, ".vcli", "artifacts");
+    const stateParts = options.directory ? [] : ["state"];
+    const directory = await storagePath(root, stateParts, options.directory);
+    const artifactParts = ["artifacts"];
+    const artifacts = await storagePath(root, artifactParts, options.directory);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    await mkdir(artifacts, { recursive: true, mode: 0o700 });
-    const db = new Database(join(directory, "sessions.sqlite"), { create: true });
+    for (const path of [directory, artifacts]) {
+      if (path === artifacts) await mkdir(artifacts, { recursive: true, mode: 0o700 });
+      const handle = await open(
+        path,
+        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+      );
+      try {
+        if (options.directory && path === directory && (await handle.stat()).mode & 0o077)
+          throw new Error(
+            "Explicit run state directory must be private; choose a directory with mode 0700.",
+          );
+        await handle.chmod(0o700);
+      } finally {
+        await handle.close();
+      }
+    }
+    const databasePath = await storagePath(
+      root,
+      [...stateParts, "sessions.sqlite"],
+      options.directory,
+    );
+    for (const suffix of ["-wal", "-shm", "-journal"])
+      await storagePath(root, [...stateParts, `sessions.sqlite${suffix}`], options.directory);
+    const handle = await open(
+      databasePath,
+      constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      0o600,
+    );
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.nlink > 1)
+        throw new Error("Storage requires regular files without hard links.");
+      await handle.chmod(0o600);
+    } finally {
+      await handle.close();
+    }
+    const db = new Database(databasePath, { create: true });
     try {
       initializeSessionSchema(db);
-      return new SqliteSessionStore(db, artifacts);
+      return new SqliteSessionStore(db, (id) =>
+        storagePath(root, [...artifactParts, id + ".txt"], options.directory),
+      );
     } catch (error) {
       db.close();
       throw error;
@@ -86,12 +124,12 @@ export class SqliteSessionStore implements SessionStore {
   }
   async putArtifact(_sessionId: string, content: string): Promise<string> {
     const id = randomUUID();
-    await writeFile(join(this.artifactRoot, id + ".txt"), content, { mode: 0o600 });
+    await writeFile(await this.artifactPath(id), content, { mode: 0o600, flag: "wx" });
     return id;
   }
   async readArtifact(id: string): Promise<string> {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid artifact identifier");
-    return readFile(join(this.artifactRoot, id + ".txt"), "utf8");
+    return readStorageText(await this.artifactPath(id));
   }
   async pendingMutations(sessionId: string): Promise<string[]> {
     const starts = new Map<string, string>();

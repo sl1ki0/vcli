@@ -13,6 +13,10 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ToolCall, ToolContext, ToolResult } from "@vcli/core";
+import { projectPath } from "./policy.ts";
+import { readFileBytes } from "./file-data.ts";
+
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 interface FileState {
   exists: boolean;
@@ -68,12 +72,15 @@ async function snapshot(
 ): Promise<{ state: FileState; content?: Buffer }> {
   await checkPath(root, path);
   try {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.nlink > 1)
         throw new Error("Checkpoint requires a regular file without hard links.");
-      const content = await handle.readFile();
+      const content = await readFileBytes(handle, MAX_FILE_BYTES);
       return {
         state: { exists: true, digest: digest(content), mode: stat.mode & 0o7777 },
         content,
@@ -129,6 +136,7 @@ export class CheckpointService {
       : requested;
     if (path.startsWith(join(root, ".vcli") + sep))
       throw new Error("Checkpointed file edits cannot target vcli state or configuration.");
+    await projectPath(root, path, { write: true });
     const previous = await snapshot(root, path);
     const expected = expectedContent(call, previous.content);
     const checkpoint: Checkpoint = {
@@ -201,7 +209,8 @@ export class CheckpointService {
       );
     }
     const root = await this.root;
-    const path = resolve(root, checkpoint.path);
+    const path = await projectPath(root, checkpoint.path, { write: true });
+    await context.authorizePath?.(path, true);
     const current = await snapshot(root, path);
     if (!matches(current.state, checkpoint.after))
       throw new Error(
@@ -262,6 +271,7 @@ export class CheckpointService {
       !inside(root, resolve(root, value.path))
     )
       throw new Error("Invalid checkpoint metadata.");
+    await projectPath(root, value.path, { write: true });
     return value;
   }
 

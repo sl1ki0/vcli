@@ -80,6 +80,7 @@ async function fixture(options: FixtureOptions = {}) {
     architecture,
     permissions,
     tools: registry,
+    beforeTool: workflows.beforeTool,
     executeTool: workflows.executeTool,
     settings: { maxTurns: 3 },
     onEvent: (event) => {
@@ -235,7 +236,9 @@ describe("checkpoint execution boundary", () => {
       [{ id: crypto.randomUUID(), name: "checkpoint_restore", arguments: { id: checkpoint.id } }],
       session.id,
     );
-    expect(resumed.messages.at(-2)!.text).toContain("preserve external edits");
+    expect(resumed.messages.filter((message) => message.role === "tool").at(-1)!.text).toContain(
+      "preserve external edits",
+    );
     expect(await readFile(join(f.root, "source.ts"), "utf8")).toBe("external formatting");
     expect((await f.checkpoints.list())[0]!.status).toBe("ready");
   });

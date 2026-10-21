@@ -4,8 +4,12 @@ import { mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import { boundText, type ToolContext, type ToolDefinition } from "@vcli/core";
 import { projectPath } from "../workflows/policy.ts";
+import { readFileBytes } from "../workflows/file-data.ts";
+
 import { executeProcess } from "./process.ts";
 import { lineNumberSchema, objectSchema, stringSchema } from "./schema.ts";
+
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 export async function authorizeFilePath(
   context: ToolContext,
@@ -18,12 +22,12 @@ export async function authorizeFilePath(
 }
 
 async function readRegularFile(path: string): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.nlink > 1)
       throw new Error("File tools require regular files without hard links.");
-    return await handle.readFile("utf8");
+    return (await readFileBytes(handle, MAX_FILE_BYTES)).toString("utf8");
   } finally {
     await handle.close();
   }
@@ -32,7 +36,7 @@ async function readRegularFile(path: string): Promise<string> {
 async function writeRegularFile(path: string, content: string): Promise<void> {
   const handle = await open(
     path,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     0o666,
   );
   try {
@@ -62,7 +66,17 @@ export const fileTools: ToolDefinition[] = [
       );
       const listed = await executeProcess(
         "rg",
-        ["--files", "--hidden", "--glob", "!.git/**", "--glob", "!.vcli/**", "--", scope],
+        [
+          "--no-config",
+          "--files",
+          "--hidden",
+          "--glob",
+          "!.git/**",
+          "--glob",
+          "!.vcli/**",
+          "--",
+          scope,
+        ],
         context,
         20_000,
       );
@@ -79,6 +93,7 @@ export const fileTools: ToolDefinition[] = [
       const result = await executeProcess(
         "rg",
         [
+          "--no-config",
           "--line-number",
           "--with-filename",
           "--no-heading",

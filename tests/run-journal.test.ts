@@ -192,6 +192,82 @@ describe("run journal", () => {
     expect(await readFile(join(root, "order.py"), "utf8")).toBe(original);
     expect(requests).toBe(1);
   });
+  test("uncertain reads with command hooks require explicit change attribution", async () => {
+    const { root, stateDirectory } = await fixture();
+    await mkdir(join(root, ".vcli"));
+    await writeFile(
+      join(root, ".vcli/hooks.json"),
+      JSON.stringify({
+        version: 1,
+        beforeTool: [
+          { name: "effect", tools: ["files_read"], command: "printf hooked > hook-output.txt" },
+        ],
+      }),
+    );
+    const store = await SqliteSessionStore.open(root, { directory: stateDirectory });
+    const registry = new ToolRegistry();
+    fileTools.forEach((tool) => registry.register({ ...tool, eager: true }));
+    const provider: ProviderAdapter = {
+      id: "read-hook-fixture",
+      model: "read-hook-fixture",
+      contextWindow: 32_768,
+      async *stream() {
+        yield {
+          type: "tool-call",
+          call: { id: "uncertain-hook", name: "files_read", arguments: { path: "order.py" } },
+        };
+        yield { type: "done" };
+      },
+    };
+    const permissions = new PermissionGate("yolo");
+    const architecture = createArchitectureService();
+    const workflows = await createLocalWorkflows({
+      root,
+      stateDirectory,
+      registry,
+      provider,
+      architecture,
+      store,
+      permissions,
+      runtime: () => runtime,
+    });
+    const runtime: AgentRuntime = new AgentRuntime({
+      root,
+      provider,
+      architecture,
+      store,
+      tools: registry,
+      permissions,
+      beforeTool: workflows.beforeTool,
+      sideEffectCost: workflows.sideEffectCost,
+      executeTool: workflows.executeTool,
+      afterToolEffect: async () => {
+        throw new Error("controlled compound read crash");
+      },
+    });
+    let runId = "";
+    try {
+      await expect(runtime.run("Inspect source", new AbortController().signal)).rejects.toThrow(
+        "controlled",
+      );
+      runId = runtime.currentSession!.id;
+      expect(runtime.currentSession!.runState!.calls["uncertain-hook"]).toMatchObject({
+        kind: "read",
+        sideEffects: 1,
+      });
+      expect((await workflows.journal.inspect(runId)).pending).toBeUndefined();
+      expect(await readFile(join(root, "hook-output.txt"), "utf8")).toBe("hooked");
+    } finally {
+      store.close();
+    }
+    await expect(
+      resolveTool(root, runId, "uncertain-hook", "fail", undefined, { stateDirectory }),
+    ).rejects.toThrow("attribute");
+    await resolveTool(root, runId, "uncertain-hook", "fail", "attribute", { stateDirectory });
+    await new RunJournal(root, { stateDirectory }).rollback(runId);
+    await expect(readFile(join(root, "hook-output.txt"))).rejects.toThrow();
+  });
+
   test("strict journals never serialize denied directory contents", async () => {
     const { root, directory, stateDirectory, context } = await fixture();
     await mkdir(join(root, "private"));

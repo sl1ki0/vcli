@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -89,6 +98,38 @@ describe("project policy", () => {
       read.execute({ path: "../policy.json" }, { ...context, authorizePath: undefined }),
     ).rejects.toThrow();
   });
+  test("alternate filesystem casing cannot bypass protected paths or denied directories", async () => {
+    const { context, root } = await fixture();
+    await mkdir(join(root, ".vcli"));
+    await writeFile(join(root, ".vcli/private-fixture.txt"), "synthetic protected data");
+    const read = fileTools.find((tool) => tool.name === "files_read")!;
+    await expect(read.execute({ path: ".VCLI/private-fixture.txt" }, context)).rejects.toThrow(
+      "protected",
+    );
+    if (
+      await readFile(join(root, "PRIVATE/secret.txt")).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      await expect(read.execute({ path: "PRIVATE/secret.txt" }, context)).rejects.toThrow(
+        "Directory",
+      );
+      await expect(
+        fileTools
+          .find((tool) => tool.name === "files_patch")!
+          .execute(
+            {
+              path: "PRIVATE/new.txt",
+              newText: "must not create",
+            },
+            context,
+          ),
+      ).rejects.toThrow("Directory");
+      await expect(readFile(join(root, "private/new.txt"))).rejects.toThrow();
+    }
+  });
+
   test("search filters denied directories before reading their contents", async () => {
     const { context } = await fixture();
     const tool = fileTools.find((tool) => tool.name === "files_search")!;
@@ -97,6 +138,54 @@ describe("project policy", () => {
     expect(result.fullOutput).not.toContain("hidden needle");
     expect(result.fullOutput).not.toContain("secret.txt");
   });
+  test("source search ignores executable preprocessors from inherited ripgrep configuration", async () => {
+    const { context, root, directory } = await fixture();
+    const preprocessor = join(directory, "preprocessor.sh");
+    await writeFile(
+      preprocessor,
+      '#!/bin/sh\nprintf executed > "' + join(root, "read-preprocessor-effect") + '"\ncat "$1"\n',
+    );
+    await chmod(preprocessor, 0o700);
+    const config = join(directory, "ripgreprc");
+    await writeFile(config, `--pre=${preprocessor}\n`);
+    const previous = process.env.RIPGREP_CONFIG_PATH;
+    process.env.RIPGREP_CONFIG_PATH = config;
+    try {
+      const result = await fileTools
+        .find((tool) => tool.name === "files_search")!
+        .execute({ query: "needle" }, context);
+      expect(result.fullOutput).toContain("visible needle");
+      await expect(readFile(join(root, "read-preprocessor-effect"))).rejects.toThrow();
+      const listed = await inspectionTools
+        .find((tool) => tool.name === "files_list")!
+        .execute({}, context);
+      expect(listed.fullOutput).toContain("source.txt");
+    } finally {
+      if (previous === undefined) delete process.env.RIPGREP_CONFIG_PATH;
+      else process.env.RIPGREP_CONFIG_PATH = previous;
+    }
+  });
+
+  test("exact Bash commands ignore inherited startup scripts and exported functions", async () => {
+    const { context, root, directory } = await fixture();
+    const startup = join(directory, "bash-startup.sh");
+    await writeFile(startup, "printf startup > shell-startup-effect\n");
+    const priorStartup = process.env.BASH_ENV;
+    const priorFunction = process.env["BASH_FUNC_printf%%"];
+    process.env.BASH_ENV = startup;
+    process.env["BASH_FUNC_printf%%"] = "() { builtin printf injected; }";
+    try {
+      const result = await shellTool.execute({ command: "printf approved" }, context);
+      expect(result.details).toMatchObject({ stdout: "approved", code: 0 });
+      await expect(readFile(join(root, "shell-startup-effect"))).rejects.toThrow();
+    } finally {
+      if (priorStartup === undefined) delete process.env.BASH_ENV;
+      else process.env.BASH_ENV = priorStartup;
+      if (priorFunction === undefined) delete process.env["BASH_FUNC_printf%%"];
+      else process.env["BASH_FUNC_printf%%"] = priorFunction;
+    }
+  });
+
   test("strict directory policy is inherited by read-only explorers", async () => {
     const { root, directory, path } = await fixture();
     const stateDirectory = join(directory, "state");
@@ -197,6 +286,156 @@ describe("project policy", () => {
       expect(result.fullOutput).not.toContain("private/secret.txt");
     }
   });
+  test("read-only Git inspection never executes repository fsmonitor commands", async () => {
+    const { context, root } = await fixture();
+    for (const args of [
+      ["init", "-q"],
+      ["add", "--", "source.txt"],
+      ["config", "core.fsmonitor", "printf fsmonitor-ran > read-tool-effect"],
+    ])
+      expect((await executeProcess("git", args, context)).code).toBe(0);
+    await writeFile(join(root, "source.txt"), "visible modification\n");
+    const diff = inspectionTools.find((tool) => tool.name === "git_diff")!;
+    for (const args of [{}, { path: "." }]) {
+      const result = await diff.execute(args, context);
+      expect(result.isError).toBe(false);
+      expect(result.fullOutput).toContain("visible modification");
+      await expect(readFile(join(root, "read-tool-effect"))).rejects.toThrow();
+    }
+  });
+
+  test("Git inspection excludes protected tracked files without an external policy", async () => {
+    const { context, root } = await fixture();
+    await mkdir(join(root, ".vcli"));
+    await writeFile(join(root, ".vcli/private-fixture.txt"), "old private fixture");
+    for (const args of [
+      ["init", "-q"],
+      ["add", "--", "source.txt", ".vcli/private-fixture.txt"],
+    ])
+      expect((await executeProcess("git", args, context)).code).toBe(0);
+    await writeFile(
+      join(root, ".vcli/private-fixture.txt"),
+      "synthetic private data must stay hidden",
+    );
+    await writeFile(join(root, "source.txt"), "public modification");
+    const result = await inspectionTools
+      .find((tool) => tool.name === "git_diff")!
+      .execute({}, { ...context, authorizePath: undefined });
+    expect(result.fullOutput).toContain("public modification");
+    expect(result.fullOutput).not.toContain("synthetic private data");
+    expect(result.fullOutput).not.toContain("private-fixture.txt");
+  });
+
+  test("cancellation during cwd resolution prevents spawning a process", async () => {
+    const { context, root } = await fixture();
+    const controller = new AbortController();
+    const pending = executeProcess(
+      "/bin/bash",
+      ["--noprofile", "--norc", "-c", "printf escaped > missed-abort.txt"],
+      { ...context, signal: controller.signal },
+    );
+    queueMicrotask(() => controller.abort(new Error("Cancel during path validation")));
+    await expect(pending).rejects.toThrow("Cancel during path validation");
+    await expect(readFile(join(root, "missed-abort.txt"))).rejects.toThrow();
+  });
+
+  test("shell cancellation kills resistant descendants after the shell closes", async () => {
+    if (process.platform === "win32") return;
+    const { context, root } = await fixture();
+    await writeFile(
+      join(root, "descendant.ts"),
+      `
+import { closeSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+closeSync(1); closeSync(2);
+writeFileSync("ready", String(process.pid));
+setTimeout(() => { writeFileSync("survived", "escaped"); }, 1100);
+`,
+    );
+    const controller = new AbortController();
+    const pending = executeProcess(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        '"$1" "$2" & wait',
+        "audit",
+        process.execPath,
+        "descendant.ts",
+      ],
+      { ...context, signal: controller.signal },
+    );
+    try {
+      const deadline = performance.now() + 1500;
+      while (performance.now() < deadline) {
+        if (
+          await readFile(join(root, "ready")).then(
+            () => true,
+            () => false,
+          )
+        )
+          break;
+        await Bun.sleep(10);
+      }
+      expect(
+        await readFile(join(root, "ready")).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
+      controller.abort(new Error("Cancel descendants"));
+      await expect(pending).rejects.toThrow("Cancel descendants");
+      await Bun.sleep(1150);
+      await expect(readFile(join(root, "survived"))).rejects.toThrow();
+    } finally {
+      controller.abort();
+      await pending.catch(() => {});
+      try {
+        process.kill(Number(await readFile(join(root, "ready"), "utf8")), "SIGKILL");
+      } catch {}
+    }
+  });
+
+  test("shell exit drains unsupported background work before reporting an outcome", async () => {
+    if (process.platform === "win32") return;
+    const { context, root } = await fixture();
+    await writeFile(
+      join(root, "background.ts"),
+      `
+import { closeSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+closeSync(1); closeSync(2);
+writeFileSync("ready", String(process.pid));
+setTimeout(() => { writeFileSync("survived", "escaped"); }, 1100);
+`,
+    );
+    const pending = executeProcess(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        '"$1" "$2" & while ! test -f ready; do sleep 0.01; done',
+        "audit",
+        process.execPath,
+        "background.ts",
+      ],
+      context,
+    );
+    try {
+      const result = await pending;
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("Background subprocesses were terminated");
+      await Bun.sleep(1150);
+      await expect(readFile(join(root, "survived"))).rejects.toThrow();
+    } finally {
+      try {
+        process.kill(Number(await readFile(join(root, "ready"), "utf8")), "SIGKILL");
+      } catch {}
+    }
+  });
+
   test("portable relative directory rules still reject nested traversal and state symlink escapes", async () => {
     const { root, directory, path } = await fixture();
     await writeFile(

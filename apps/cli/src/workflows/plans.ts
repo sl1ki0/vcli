@@ -1,6 +1,6 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import type { RunPlanState, Session } from "@vcli/core";
+import { readStorageText, storagePath } from "./state-path.ts";
 
 const statusLabel = { pending: "○", "in-progress": "◐", complete: "✓" } as const;
 
@@ -63,25 +63,39 @@ export async function savePlan(
     ?.filter((message) => message.role === "assistant" && message.text.trim())
     .at(-1);
   if (!session.plan && !response) return;
-  const directory = join(options.directory ?? join(root, ".vcli/state"), "plans");
-  await mkdir(directory, { recursive: true });
-  const path = join(directory, `${session.id}.md`);
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  await writeFile(
-    temporary,
+  if (!/^[\w.-]+$/.test(session.id)) throw new Error("Invalid plan run ID.");
+  const parts = options.directory ? ["plans"] : ["state", "plans"];
+  const path = (name?: string) =>
+    storagePath(root, name ? [...parts, name] : parts, options.directory);
+  await mkdir(await path(), { recursive: true, mode: 0o700 });
+  await path(`${session.id}.md`);
+  if (session.plan) await path(`${session.id}.json`);
+  const write = async (name: string, content: string) => {
+    const temporary = `${name}.${crypto.randomUUID()}.tmp`;
+    let created = false;
+    try {
+      const file = await open(await path(temporary), "wx", 0o600);
+      created = true;
+      try {
+        await file.writeFile(content);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(await path(temporary), await path(name));
+    } finally {
+      if (created) await rm(await path(temporary), { force: true });
+    }
+  };
+  await write(
+    `${session.id}.md`,
     session.plan ? formatRunPlan(session.plan, session.id) : response!.text,
-    {
-      mode: 0o600,
-    },
   );
-  await rename(temporary, path);
   if (session.plan) {
-    const structured = join(directory, `${session.id}.json`);
-    const pending = `${structured}.${crypto.randomUUID()}.tmp`;
-    await writeFile(pending, JSON.stringify({ runId: session.id, plan: session.plan }, null, 2), {
-      mode: 0o600,
-    });
-    await rename(pending, structured);
+    await write(
+      `${session.id}.json`,
+      JSON.stringify({ runId: session.id, plan: session.plan }, null, 2),
+    );
   }
 }
 
@@ -91,7 +105,8 @@ export async function readPlans(
   options: { directory?: string } = {},
 ): Promise<string> {
   if (runId && !/^[\w.-]+$/.test(runId)) throw new Error("Invalid plan run ID.");
-  const directory = join(options.directory ?? join(root, ".vcli/state"), "plans");
+  const parts = options.directory ? ["plans"] : ["state", "plans"];
+  const directory = await storagePath(root, parts, options.directory);
   const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -103,7 +118,7 @@ export async function readPlans(
       .slice(-20)
       .map(
         async (name) =>
-          `Plan ${name.slice(0, -3)}\n${await readFile(join(directory, name), "utf8")}`,
+          `Plan ${name.slice(0, -3)}\n${await readStorageText(await storagePath(root, [...parts, name], options.directory))}`,
       ),
   );
   return (
